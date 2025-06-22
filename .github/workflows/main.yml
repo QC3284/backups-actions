@@ -33,7 +33,7 @@ jobs:
           # 创建失败记录文件
           echo "" > failed_backups.txt
 
-      - name: Backup repositories with retry
+      - name: Backup repositories with individual commits
         id: backup
         run: |
           # 处理每个仓库URL
@@ -56,6 +56,9 @@ jobs:
               status=1
               retry_count=0
               max_retries=3
+              
+              # 记录当前备份目录状态（用于检测变化）
+              pre_backup_state=$(git status --porcelain "$backup_dir" 2>/dev/null || true)
               
               # 重试循环
               while [ $status -ne 0 ] && [ $retry_count -lt $max_retries ]; do
@@ -81,6 +84,33 @@ jobs:
                   echo "✅ Success on attempt $((retry_count+1)): $repo_url"
                   # 记录成功备份的仓库
                   echo "$owner/$repo" >> success_backups.txt
+                  
+                  # 检查备份目录是否有实际变化
+                  post_backup_state=$(git status --porcelain "$backup_dir" 2>/dev/null || true)
+                  
+                  if [ "$pre_backup_state" != "$post_backup_state" ]; then
+                    # 提交单个仓库的备份
+                    echo "💾 Committing changes for $owner/$repo"
+                    
+                    # 添加当前备份目录
+                    git add "$backup_dir"
+                    
+                    # 生成提交信息
+                    commit_msg="📤 Backup $owner/$repo: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+                    
+                    # 添加尝试次数信息
+                    if [ $retry_count -gt 0 ]; then
+                      commit_msg="$commit_msg (after $((retry_count+1)) attempts)"
+                    fi
+                    
+                    # 提交变更
+                    git commit -m "$commit_msg"
+                    git push
+                    echo "🚀 Changes committed and pushed for $owner/$repo"
+                  else
+                    echo "🟢 No changes detected for $owner/$repo"
+                  fi
+                  
                   break
                 else
                   echo "⚠️ Attempt $((retry_count+1)) failed for $repo_url"
@@ -110,59 +140,21 @@ jobs:
             echo "--------------------------------------------------"
           done < back_ck_url.txt
 
-      - name: Commit changes
-        if: always()  # 即使部分备份失败也尝试提交
-        run: |
-          # 添加所有备份文件
-          git add backups/
-          
-          # 检查是否有变更
-          if git diff-index --quiet HEAD --; then
-            echo "🟢 No changes detected"
-          else
-            # 生成提交信息
-            commit_msg="📤 Backup update: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            
-            # 添加成功备份的仓库
-            if [ -s success_backups.txt ]; then
-              commit_msg="$commit_msg\n\n✅ Successfully backed up:"
-              while IFS= read -r repo; do
-                if [ -n "$repo" ]; then
-                  commit_msg="$commit_msg\n• $repo"
-                fi
-              done < success_backups.txt
-            fi
-          
-            # 添加失败备份的仓库
-            if [ -s failed_backups.txt ]; then
-              commit_msg="$commit_msg\n\n❌ Failed to backup:"
-              while IFS= read -r repo; do
-                if [ -n "$repo" ]; then
-                  commit_msg="$commit_msg\n• $repo"
-                fi
-              done < failed_backups.txt
-            fi
-          
-            # 提交变更
-            echo -e "$commit_msg" | git commit -F -
-            git push
-            echo "🚀 Changes committed and pushed"
-          fi
-
       - name: Report status
         run: |
           # 创建工作流摘要
           echo "## 📊 Backup Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | Repository | Attempts |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------------|----------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Repository | Attempts | Commit |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------------|----------|--------|" >> $GITHUB_STEP_SUMMARY
           
           # 添加成功备份
           if [ -s success_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ]; then
-                # 从日志中提取尝试次数
+                # 从日志中提取尝试次数和提交状态
                 attempts=$(grep -A 10 "📦 Processing: .*$repo" $GITHUB_STEP_SUMMARY | grep -m 1 "✅ Success on attempt" | awk '{print $4}' | cut -d: -f1 || echo "1")
-                echo "| ✅ | $repo | $attempts |" >> $GITHUB_STEP_SUMMARY
+                commit_status=$(grep -A 10 "📦 Processing: .*$repo" $GITHUB_STEP_SUMMARY | grep -m 1 "🚀 Changes committed" && echo "✅" || echo "🟢 No changes")
+                echo "| ✅ | $repo | $attempts | $commit_status |" >> $GITHUB_STEP_SUMMARY
               fi
             done < success_backups.txt
           fi
@@ -173,12 +165,20 @@ jobs:
               if [ -n "$repo" ]; then
                 # 检查是否是无效URL
                 if [[ "$repo" == *"(invalid)" ]]; then
-                  echo "| ⚠️ | $repo | - |" >> $GITHUB_STEP_SUMMARY
+                  echo "| ⚠️ | $repo | - | - |" >> $GITHUB_STEP_SUMMARY
                 else
                   # 从日志中提取尝试次数
                   attempts=$(grep -A 10 "📦 Processing: .*$repo" $GITHUB_STEP_SUMMARY | grep -m 1 "❌ Backup failed after" | awk '{print $5}' || echo "$max_retries")
-                  echo "| ❌ | $repo | $attempts |" >> $GITHUB_STEP_SUMMARY
+                  echo "| ❌ | $repo | $attempts | - |" >> $GITHUB_STEP_SUMMARY
                 fi
               fi
             done < failed_backups.txt
           fi
+          
+          # 添加总结信息
+          success_count=$(wc -l < success_backups.txt | xargs)
+          failed_count=$(wc -l < failed_backups.txt | xargs)
+          echo "### 📝 Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Successfully backed up: $success_count repositories" >> $GITHUB_STEP_SUMMARY
+          echo "- ❌ Failed to backup: $failed_count repositories" >> $GITHUB_STEP_SUMMARY
+          echo "- 🕒 Total processing time: $((SECONDS / 60))m $((SECONDS % 60))s" >> $GITHUB_STEP_SUMMARY
