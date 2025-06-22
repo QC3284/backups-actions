@@ -1,5 +1,4 @@
 https://github.com/clashdownload/Clash
-https://github.com/vernesong/OpenClash
 https://github.com/qC3284/clash-gz
 https://github.com/MetaCubeX/mihomo
 https://github.com/vernesong/mihomo
@@ -42,3 +41,4 @@ https://github.com/kiddin9/packages-compile
 https://github.com/kiddin9/china_ip_list
 https://github.com/kiddin9/luci-app-wizard
 https://github.com/kiddin9/luci-app-mihomo
+https://github.com/vernesong/OpenClash
