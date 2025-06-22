@@ -36,7 +36,6 @@ https://github.com/jerrykuku/luci-app-argon-config
 https://github.com/kiddin9/luci-theme-edge
 https://github.com/kiddin9/Kwrt
 https://github.com/kiddin9/luci-app-dnsfilter
-https://github.com/kiddin9/packages-compile
 https://github.com/kiddin9/china_ip_list
 https://github.com/kiddin9/luci-app-wizard
 https://github.com/kiddin9/luci-app-mihomo
