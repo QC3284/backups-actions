@@ -1,0 +1,98 @@
+name: Repository Backup Automation
+
+on:
+  workflow_dispatch:  # 手动触发
+  schedule:
+    - cron: '0 0 * * *'  # 每天UTC时间0点自动运行
+
+jobs:
+  backup-repositories:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout current repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # 获取所有历史记录
+
+      - name: Setup Git User
+        run: |
+          git config --global user.name "GitHub Actions"
+          git config --global user.email "actions@users.noreply.github.com"
+
+      - name: Backup repositories
+        id: backup
+        run: |
+          # 创建备份目录
+          mkdir -p backups
+          
+          # 处理每个仓库URL
+          while IFS= read -r repo_url; do
+            # 跳过空行和注释
+            [[ -z "$repo_url" || "$repo_url" == \#* ]] && continue
+            
+            echo "📦 Processing: $repo_url"
+            
+            # 从URL解析owner和repo名称
+            if [[ $repo_url =~ github.com[/:]([^/]+)/([^/.]+) ]]; then
+              owner="${BASH_REMATCH[1]}"
+              repo="${BASH_REMATCH[2]%.git}"  # 移除.git后缀
+              backup_dir="backups/$owner/$repo"
+              
+              # 创建备份目录
+              mkdir -p "$backup_dir"
+              
+              # 备份逻辑
+              if [ -d "$backup_dir" ] && [ -f "$backup_dir/HEAD" ]; then
+                echo "🔄 Updating existing backup..."
+                (
+                  cd "$backup_dir"
+                  git fetch --all --force --tags 2>&1 | sed 's/^/    /'
+                )
+                status=$?
+              else
+                echo "✨ Creating new backup..."
+                git clone --mirror "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
+                status=$?
+              fi
+              
+              # 处理备份结果
+              if [ $status -eq 0 ]; then
+                echo "✅ Success: $repo_url"
+                echo "owner=$owner" >> $GITHUB_OUTPUT
+                echo "repo=$repo" >> $GITHUB_OUTPUT
+              else
+                echo "❌ Backup failed for $repo_url, keeping old version"
+                # 恢复可能被修改的文件
+                git restore "$backup_dir" || true
+              fi
+            else
+              echo "⚠️ Invalid URL: $repo_url"
+            fi
+            echo "--------------------------------------------------"
+          done < back_ck_url.txt
+
+      - name: Commit changes
+        if: success()
+        run: |
+          # 检查是否有变更
+          if git diff-index --quiet HEAD --; then
+            echo "🟢 No changes detected"
+          else
+            # 添加所有备份文件
+            git add backups/
+            
+            # 生成提交信息
+            commit_msg="📤 Backup update: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            
+            # 添加成功备份的仓库
+            echo "${{ steps.backup.outputs.owner }}" | while read -r owner; do
+              if [ -n "$owner" ]; then
+                commit_msg="$commit_msg"$'\n'"• $owner/${{ steps.backup.outputs.repo }}"
+              fi
+            done
+            
+            # 提交变更
+            git commit -m "$commit_msg"
+            git push
+            echo "🚀 Changes committed and pushed"
+          fi
