@@ -1,0 +1,6 @@
+# pack-refs with: peeled fully-peeled sorted 
+be62f56782551e17d6d5dc23bc29cc56ef961a66 refs/heads/master
+255c5e0a5a28d25d6e995a8c721f3259d1066c08 refs/heads/reloadtitle
+e07d456ee85f2f2d23128544876034a8c40d2782 refs/heads/shell
+9ab28864b3b83c360ec3b1011a36f2db26b6e4e4 refs/heads/upload-indicator
+2cc8ea5dae64ab36953e89d32deeb4887d8a72be refs/heads/uploads_limit
