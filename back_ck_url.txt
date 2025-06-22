@@ -36,9 +36,9 @@ https://github.com/1715173329/sing-geosite
 https://github.com/metowolf/iplist
 https://github.com/1715173329/iplist
 https://github.com/hanwckf/rt-n56u
-https://bitbucket.org/padavan/rt-n56u
 https://github.com/hanwckf/immortalwrt-mt798x
 https://github.com/hanwckf/bl-mt798x
 https://github.com/lushangkan/immortalwrt-mt7621
 https://github.com/bwnqx/immortalwrt-mt7621
 https://github.com/padavanonly/immortalwrt
+https://github.com/immortalwrt/homeproxy
