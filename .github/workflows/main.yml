@@ -5,6 +5,9 @@ on:
   schedule:
     - cron: '0 0 * * *'  # 每天UTC时间0点自动运行
 
+permissions:
+  contents: write  # 允许提交更改
+
 jobs:
   backup-repositories:
     runs-on: ubuntu-latest
@@ -13,18 +16,24 @@ jobs:
         uses: actions/checkout@v4
         with:
           fetch-depth: 0  # 获取所有历史记录
+          ref: ${{ github.ref }}  # 明确指定分支
 
       - name: Setup Git User
         run: |
-          git config --global user.name "GitHub Actions"
-          git config --global user.email "actions@users.noreply.github.com"
+          git config --global user.name "GitHub Actions Backup"
+          git config --global user.email "actions-backup@users.noreply.github.com"
+          git config --global init.defaultBranch main  # 设置默认分支
+
+      - name: Prepare backup environment
+        run: |
+          # 创建备份目录
+          mkdir -p backups
+          # 创建成功备份记录文件
+          echo "" > success_backups.txt
 
       - name: Backup repositories
         id: backup
         run: |
-          # 创建备份目录
-          mkdir -p backups
-          
           # 处理每个仓库URL
           while IFS= read -r repo_url; do
             # 跳过空行和注释
@@ -39,18 +48,21 @@ jobs:
               backup_dir="backups/$owner/$repo"
               
               # 创建备份目录
-              mkdir -p "$backup_dir"
+              mkdir -p "$(dirname "$backup_dir")"
               
-              # 备份逻辑
+              # 备份逻辑 - 处理首次备份
               if [ -d "$backup_dir" ] && [ -f "$backup_dir/HEAD" ]; then
                 echo "🔄 Updating existing backup..."
                 (
                   cd "$backup_dir"
-                  git fetch --all --force --tags 2>&1 | sed 's/^/    /'
+                  git fetch --all --force --tags --prune 2>&1 | sed 's/^/    /'
                 )
                 status=$?
               else
-                echo "✨ Creating new backup..."
+                echo "✨ Creating new backup (first time)..."
+                # 确保目录不存在
+                rm -rf "$backup_dir" 2>/dev/null || true
+                # 完整克隆仓库
                 git clone --mirror "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
                 status=$?
               fi
@@ -58,12 +70,12 @@ jobs:
               # 处理备份结果
               if [ $status -eq 0 ]; then
                 echo "✅ Success: $repo_url"
-                echo "owner=$owner" >> $GITHUB_OUTPUT
-                echo "repo=$repo" >> $GITHUB_OUTPUT
+                # 记录成功备份的仓库
+                echo "$owner/$repo" >> success_backups.txt
               else
-                echo "❌ Backup failed for $repo_url, keeping old version"
+                echo "❌ Backup failed for $repo_url, keeping old version if exists"
                 # 恢复可能被修改的文件
-                git restore "$backup_dir" || true
+                git checkout -- "$backup_dir" 2>/dev/null || true
               fi
             else
               echo "⚠️ Invalid URL: $repo_url"
@@ -72,27 +84,56 @@ jobs:
           done < back_ck_url.txt
 
       - name: Commit changes
-        if: success()
+        if: always()  # 即使部分备份失败也尝试提交
         run: |
+          # 添加所有备份文件
+          git add backups/
+          
           # 检查是否有变更
           if git diff-index --quiet HEAD --; then
             echo "🟢 No changes detected"
           else
-            # 添加所有备份文件
-            git add backups/
-            
             # 生成提交信息
             commit_msg="📤 Backup update: $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
             
             # 添加成功备份的仓库
-            echo "${{ steps.backup.outputs.owner }}" | while read -r owner; do
-              if [ -n "$owner" ]; then
-                commit_msg="$commit_msg"$'\n'"• $owner/${{ steps.backup.outputs.repo }}"
-              fi
-            done
-            
+            if [ -s success_backups.txt ]; then
+              commit_msg="$commit_msg\n\n✅ Successfully backed up:"
+              while IFS= read -r repo; do
+                if [ -n "$repo" ]; then
+                  commit_msg="$commit_msg\n• $repo"
+                fi
+              done < success_backups.txt
+            fi
+          
+            # 添加失败统计（如果有）
+            failed_count=$(grep -c "❌" "$GITHUB_STEP_SUMMARY" || true)
+            if [ "$failed_count" -gt 0 ]; then
+              commit_msg="$commit_msg\n\n❌ $failed_count repositories failed backup"
+            fi
+          
             # 提交变更
-            git commit -m "$commit_msg"
+            echo -e "$commit_msg" | git commit -F -
             git push
             echo "🚀 Changes committed and pushed"
           fi
+
+      - name: Report status
+        run: |
+          # 创建工作流摘要
+          echo "## 📊 Backup Summary" >> $GITHUB_STEP_SUMMARY
+          echo "| Status | Repository |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|------------|" >> $GITHUB_STEP_SUMMARY
+          
+          # 添加成功备份
+          if [ -s success_backups.txt ]; then
+            while IFS= read -r repo; do
+              if [ -n "$repo" ]; then
+                echo "| ✅ | $repo |" >> $GITHUB_STEP_SUMMARY
+              fi
+            done < success_backups.txt
+          fi
+          
+          # 添加失败备份
+          grep "❌ Backup failed for" $GITHUB_STEP_SUMMARY | sed -E 's/.*❌ Backup failed for (.*)/| ❌ | \1 |/' >> $GITHUB_STEP_SUMMARY || true
+          grep "⚠️ Invalid URL" $GITHUB_STEP_SUMMARY | sed -E 's/.*⚠️ Invalid URL: (.*)/| ⚠️ | Invalid URL: \1 |/' >> $GITHUB_STEP_SUMMARY || true
