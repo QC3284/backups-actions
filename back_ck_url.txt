@@ -28,7 +28,6 @@ https://github.com/kenzok8/golang
 https://github.com/gdy666/lucky
 https://github.com/gdy666/luci-app-lucky
 https://github.com/gdy666/homebox
-https://github.com/gdy666/lucky-files
 https://github.com/gdy666/filebrowser_pr
 https://github.com/jeessy2/ddns-go
 https://github.com/jeessy2/backup-x
