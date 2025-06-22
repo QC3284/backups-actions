@@ -21,7 +21,6 @@ https://github.com/1715173329/iplist
 https://github.com/hanwckf/bl-mt798x
 https://github.com/immortalwrt/homeproxy
 https://github.com/DragonBluep/uboot-mt7621
-https://github.com/kenzok8/openwrt-packages
 https://github.com/kenzok8/jell
 https://github.com/kenzok8/small-package
 https://github.com/kenzok8/litte
