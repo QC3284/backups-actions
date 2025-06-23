@@ -242,65 +242,38 @@ jobs:
       - name: Generate Release Summary
         id: release_summary
         run: |
-          # 修复计数问题
-          success_count=0
-          if [ -f success_backups.txt ]; then
-            success_count=$(grep -c '[^[:space:]]' success_backups.txt)
-          fi
-          
-          failed_count=0
-          if [ -f failed_backups.txt ]; then
-            failed_count=$(grep -c '[^[:space:]]' failed_backups.txt)
-          fi
-          
-          # 计算低磁盘空间事件次数
+          success_count=$(grep -c '[^[:space:]]' success_backups.txt 2>/dev/null || echo 0)
+          failed_count=$(grep -c '[^[:space:]]' failed_backups.txt 2>/dev/null || echo 0)
           low_disk_count=$(grep -c "Low disk space" $GITHUB_STEP_SUMMARY 2>/dev/null || echo 0)
-          
-          # 生成Release正文
+
           release_body="## 📊 Backup Summary\n\n"
-          release_body+="### ✅ Successfully Backed Up ($success_count)\n"
-          release_body+="| Repository | Size |\n"
-          release_body+="|------------|------|\n"
-          
-          # 从上传记录中获取大小信息
-          if [ -f uploaded_backups.txt ] && [ -s uploaded_backups.txt ]; then
-            while IFS= read -r line; do
-              if [ -n "$line" ]; then
-                repo=$(echo "$line" | awk '{print $1}')
-                size=$(echo "$line" | awk '{print $2}')
-                release_body+="| $repo | $size |\n"
-              fi
+          release_body+="### ✅ Successfully Backed Up ($success_count)\n| Repository | Size |\n|------------|------|\n"
+
+          if [ -f uploaded_backups.txt ]; then
+            while read -r line; do
+              [[ -n "$line" ]] && release_body+="| $(awk '{print $1, $2}' <<< "$line") |\n"
             done < uploaded_backups.txt
           fi
           
-          release_body+="\n### ❌ Failed to Backup ($failed_count)\n"
-          release_body+="| Repository | Reason |\n"
-          release_body+="|------------|--------|\n"
-          
-          if [ -f failed_backups.txt ] && [ -s failed_backups.txt ]; then
-            while IFS= read -r repo; do
-              if [ -n "$repo" ]; then
-                if [[ "$repo" == *"(invalid)" ]]; then
-                  release_body+="| ${repo% (invalid)} | Invalid URL |\n"
-                else
-                  release_body+="| $repo | Backup failed |\n"
-                fi
+          release_body+="\n### ❌ Failed to Backup ($failed_count)\n| Repository | Reason |\n|------------|--------|\n"
+
+          if [ -f failed_backups.txt ] && [[ $(wc -l < failed_backups.txt) -gt 0 ]]; then
+            while read -r repo; do
+              if [[ "$repo" == *"(invalid)" ]]; then
+                release_body+="| ${repo% (invalid)} | Invalid URL |\n"
+              elif [[ -n "$repo" ]]; then
+                release_body+="| $repo | Backup failed |\n"
               fi
             done < failed_backups.txt
           else
             release_body+="| - | All backups succeeded |\n"
           fi
+
+          release_body+="\n### 💾 Disk Space Management\n- Initial cleanup performed\n- Low space detected $low_disk_count times\n- Large files (>50MB) uploaded immediately"
           
-          release_body+="\n### 💾 Disk Space Management\n"
-          release_body+="- Initial disk cleanup performed\n"
-          release_body+="- Low disk space detected $low_disk_count times\n"
-          release_body+="- Large files (>50MB) uploaded immediately\n"
-          
-          # 正确设置输出变量
           echo "success_count=$success_count" >> $GITHUB_OUTPUT
           echo "failed_count=$failed_count" >> $GITHUB_OUTPUT
-          
-          # 使用替代方法设置多行输出
+
           release_body="${release_body//'%'/'%25'}"
           release_body="${release_body//$'\n'/'%0A'}"
           release_body="${release_body//$'\r'/'%0D'}"
