@@ -1,12 +1,12 @@
 name: Repository Backup and Release
 
 on:
-  workflow_dispatch:  # 手动触发
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * *'  # 每天UTC时间0点自动运行
+    - cron: '0 0 * * *'
 
 permissions:
-  contents: write  # 允许创建Release
+  contents: write
 
 jobs:
   backup-and-release:
@@ -17,90 +17,71 @@ jobs:
 
       - name: Setup environment
         run: |
-          # 创建工作目录
           mkdir -p backup_temp
-          # 创建成功备份记录文件
-          echo "" > success_backups.txt
-          # 创建失败记录文件
-          echo "" > failed_backups.txt
-          # 创建压缩包目录
           mkdir -p compressed_backups
+          echo "" > success_backups.txt
+          echo "" > failed_backups.txt
+
+      - name: Install required tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xz-utils pv
 
       - name: Backup and compress repositories
         id: backup
         run: |
-          # 安装xz-utils用于最高压缩级别
-          sudo apt-get update
-          sudo apt-get install -y xz-utils
-          
-          # 处理每个仓库URL
           while IFS= read -r repo_url; do
-            # 跳过空行和注释
             [[ -z "$repo_url" || "$repo_url" == \#* ]] && continue
-            
             echo "📦 Processing: $repo_url"
             
-            # 从URL解析owner和repo名称
             if [[ $repo_url =~ github.com[/:]([^/]+)/([^/.]+) ]]; then
               owner="${BASH_REMATCH[1]}"
-              repo="${BASH_REMATCH[2]%.git}"  # 移除.git后缀
+              repo="${BASH_REMATCH[2]%.git}"
               backup_dir="backup_temp/$owner-$repo"
-              compressed_file="compressed_backups/$owner-$repo-$(date +%Y%m%d-%H%M%S).tar.xz"
+              compressed_file="compressed_backups/$owner-$repo-$(date +%Y%m%d%H%M%S).tar.xz"
               
-              # 备份状态和重试计数器
               status=1
               retry_count=0
               max_retries=3
               
-              # 重试循环
               while [ $status -ne 0 ] && [ $retry_count -lt $max_retries ]; do
-                # 备份逻辑
-                echo "🔄 Cloning repository (attempt $((retry_count+1))..."
-                # 确保目录不存在
+                echo "🔄 Cloning repository (attempt $((retry_count+1))"
                 rm -rf "$backup_dir" 2>/dev/null || true
-                # 完整克隆仓库
                 git clone --mirror "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
                 status=$?
                 
-                # 检查状态
                 if [ $status -eq 0 ]; then
-                  echo "✅ Clone success on attempt $((retry_count+1)): $repo_url"
+                  echo "✅ Clone success"
                   
-                  # 创建最高压缩级别的归档
-                  echo "💾 Compressing with maximum compression (XZ -9e)..."
+                  # 修复压缩路径问题
+                  echo "💾 Compressing with maximum compression"
+                  mkdir -p "$(dirname "$compressed_file")"
+                  
+                  # 使用正确的压缩命令
                   (
                     cd "$backup_dir"
-                    # 使用最高压缩级别 (XZ -9e)
-                    tar cf - . | xz -9e -T0 > "../$compressed_file"
+                    tar cf - . | pv | xz -9e -T0 > "../$compressed_file"
                   )
                   
-                  # 检查压缩文件大小
                   file_size=$(du -h "$compressed_file" | cut -f1)
                   echo "📦 Created compressed backup: $compressed_file ($file_size)"
-                  
-                  # 记录成功备份的仓库
                   echo "$owner/$repo" >> success_backups.txt
                   break
                 else
-                  echo "⚠️ Attempt $((retry_count+1)) failed for $repo_url"
+                  echo "⚠️ Attempt $((retry_count+1)) failed"
                   retry_count=$((retry_count+1))
-                  
-                  # 如果不是最后一次尝试，等待5秒再重试
                   if [ $retry_count -lt $max_retries ]; then
-                    echo "⏳ Waiting 5 seconds before retry..."
+                    echo "⏳ Waiting 5 seconds before retry"
                     sleep 5
                   fi
                 fi
               done
               
-              # 如果最终失败
               if [ $status -ne 0 ]; then
-                echo "❌ Backup failed after $max_retries attempts for $repo_url"
-                # 记录失败备份
+                echo "❌ Backup failed after $max_retries attempts"
                 echo "$owner/$repo" >> failed_backups.txt
               fi
               
-              # 清理临时目录
               rm -rf "$backup_dir" 2>/dev/null || true
             else
               echo "⚠️ Invalid URL: $repo_url"
@@ -109,58 +90,21 @@ jobs:
             echo "--------------------------------------------------"
           done < back_ck_url.txt
 
-      - name: Create Release
-        id: create_release
-        if: success() || failure()  # 即使部分失败也尝试创建Release
-        uses: actions/create-release@v1
-        with:
-          tag_name: backup-$(date +%Y%m%d-%H%M%S)
-          release_name: "📦 Repository Backups $(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-          body: |
-            ### 🚀 Automated Repository Backups
-            - ✅ Successfully backed up: ${{ steps.backup.outputs.success_count }} repositories
-            - ❌ Failed to backup: ${{ steps.backup.outputs.failed_count }} repositories
-            - 🕒 Generated at: $(date -u +'%Y-%m-%d %H:%M:%S UTC')
-            
-            #### 🔍 Backup Details:
-            ${{ steps.backup.outputs.release_body }}
-          draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Backup Assets
-        if: success() || failure()
-        uses: actions/upload-release-asset@v1
-        with:
-          upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./compressed_backups/
-          asset_name: ${{ github.event.repository.name }}-backups
-          asset_content_type: application/x-xz
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Generate Release Summary
         id: release_summary
         run: |
-          # 计算成功和失败数量
           success_count=$(grep -c . success_backups.txt 2>/dev/null || echo 0)
           failed_count=$(grep -c . failed_backups.txt 2>/dev/null || echo 0)
           
-          # 生成Release正文
           release_body="#### 📊 Backup Summary\n"
           release_body+="| Status | Repository | Size |\n"
           release_body+="|--------|------------|------|\n"
           
-          # 添加成功备份信息
           if [ -s success_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ]; then
-                # 获取压缩文件名
                 owner_repo="${repo/\//-}"
                 compressed_file=$(ls compressed_backups/$owner_repo-*.tar.xz 2>/dev/null | head -1)
-                
-                # 获取文件大小
                 if [ -f "$compressed_file" ]; then
                   file_size=$(du -h "$compressed_file" | cut -f1)
                   release_body+="| ✅ | $repo | $file_size |\n"
@@ -171,64 +115,77 @@ jobs:
             done < success_backups.txt
           fi
           
-          # 添加失败备份信息
           if [ -s failed_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ] && [[ ! "$repo" == *"(invalid)" ]]; then
                 release_body+="| ❌ | $repo | - |\n"
               elif [[ "$repo" == *"(invalid)" ]]; then
-                release_body+="| ⚠️ | Invalid URL: ${repo% (invalid)} | - |\n"
+                release_body+="| ⚠️ | ${repo% (invalid)} | - |\n"
               fi
             done < failed_backups.txt
           fi
           
-          # 添加压缩文件列表
           release_body+="\n#### 📦 Compressed Backup Files:\n"
           release_body+="\`\`\`\n"
-          release_body+="$(ls -lh compressed_backups/ | awk '{print $9, $5}')\n"
+          release_body+="$(ls -lh compressed_backups/ 2>/dev/null || echo "No files")\n"
           release_body+="\`\`\`\n"
           
-          # 设置输出变量
           echo "success_count=$success_count" >> $GITHUB_OUTPUT
           echo "failed_count=$failed_count" >> $GITHUB_OUTPUT
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
-          echo "$release_body" >> $GITHUB_OUTPUT
+          echo -e "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
+      - name: Create Release
+        id: create_release
+        # 修复标签格式：使用无连字符的时间戳
+        run: |
+          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
+          gh release create "$TAG_NAME" \
+            --title "📦 Repository Backups $(date -u +'%Y-%m-%d %H:%M:%S UTC')" \
+            --notes "Automated repository backups" \
+            --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload Backup Assets
+        run: |
+          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
+          for file in compressed_backups/*; do
+            if [ -f "$file" ]; then
+              echo "📤 Uploading $file"
+              gh release upload "$TAG_NAME" "$file" \
+                --repo $GITHUB_REPOSITORY \
+                --clobber
+            fi
+          done
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Update Release Description
-        if: success() || failure()
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          script: |
-            const { data: release } = await github.rest.repos.getRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: ${{ steps.create_release.outputs.id }}
-            });
-            
-            // 更新Release描述
-            await github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: ${{ steps.create_release.outputs.id }},
-              body: `${{ steps.create_release.outputs.body }}\n\n${{ steps.release_summary.outputs.release_body }}`
-            });
+        run: |
+          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
+          # 获取当前release ID
+          RELEASE_ID=$(gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG_NAME --jq '.id')
+          
+          # 更新release描述
+          gh api repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID \
+            -X PATCH \
+            -f body="${{ steps.release_summary.outputs.release_body }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report status
         run: |
-          # 创建工作流摘要
           echo "## 📊 Backup Summary" >> $GITHUB_STEP_SUMMARY
           echo "| Status | Repository | Size |" >> $GITHUB_STEP_SUMMARY
           echo "|--------|------------|------|" >> $GITHUB_STEP_SUMMARY
           
-          # 添加成功备份
           if [ -s success_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ]; then
                 owner_repo="${repo/\//-}"
                 compressed_file=$(ls compressed_backups/$owner_repo-*.tar.xz 2>/dev/null | head -1)
-                
                 if [ -f "$compressed_file" ]; then
                   file_size=$(du -h "$compressed_file" | cut -f1)
                   echo "| ✅ | $repo | $file_size |" >> $GITHUB_STEP_SUMMARY
@@ -239,23 +196,17 @@ jobs:
             done < success_backups.txt
           fi
           
-          # 添加失败备份
           if [ -s failed_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ] && [[ ! "$repo" == *"(invalid)" ]]; then
                 echo "| ❌ | $repo | - |" >> $GITHUB_STEP_SUMMARY
               elif [[ "$repo" == *"(invalid)" ]]; then
-                echo "| ⚠️ | Invalid URL: ${repo% (invalid)} | - |" >> $GITHUB_STEP_SUMMARY
+                echo "| ⚠️ | ${repo% (invalid)} | - |" >> $GITHUB_STEP_SUMMARY
               fi
             done < failed_backups.txt
           fi
           
-          # 添加总结信息
-          success_count=${{ steps.release_summary.outputs.success_count }}
-          failed_count=${{ steps.release_summary.outputs.failed_count }}
-          release_url=${{ steps.create_release.outputs.html_url }}
           echo "### 📝 Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Successfully backed up: $success_count repositories" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ Failed to backup: $failed_count repositories" >> $GITHUB_STEP_SUMMARY
-          echo "- 📦 Release created: [$release_url]($release_url)" >> $GITHUB_STEP_SUMMARY
-          echo "- 🕒 Total processing time: $((SECONDS / 60))m $((SECONDS % 60))s" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ Success: ${{ steps.release_summary.outputs.success_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ❌ Failed: ${{ steps.release_summary.outputs.failed_count }}" >> $GITHUB_STEP_SUMMARY
+          echo "- 🕒 Time: $((SECONDS / 60))m $((SECONDS % 60))s" >> $GITHUB_STEP_SUMMARY
