@@ -15,19 +15,21 @@ jobs:
       - name: Checkout current repo
         uses: actions/checkout@v4
 
-      - name: Free Disk Space
+      - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
-          # 清理各种缓存和临时文件
-          tool-cache: true
-          android-sdk-cache: true
-          dotnet-sdk-cache: true
-          haskell-stack-cache: true
-          pip-cache: true
-          ruby-bundle-cache: true
-          swap-storage: true
-          # 保留至少10GB空间
-          target-free-space: 10GB
+         # this might remove tools that are actually needed,
+         # if set to "true" but frees about 6 GB
+         tool-cache: false
+        
+         # all of these default to true, but feel free to set to
+         # "false" if necessary for your workflow
+         android: true
+         dotnet: true
+         haskell: true
+         large-packages: true
+         docker-images: true
+         swap-storage: true
 
       - name: Setup environment
         run: |
