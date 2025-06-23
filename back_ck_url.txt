@@ -22,6 +22,9 @@ https://github.com/immortalwrt/homeproxy
 https://github.com/DragonBluep/uboot-mt7621
 https://github.com/kenzok8/compile-jell
 https://github.com/kenzok8/small
+https://github.com/kenzok8/jell
+https://github.com/kenzok8/small-package
+https://github.com/kenzok8/openwrt-packages
 https://github.com/kenzok8/openwrt_Build
 https://github.com/kenzok8/sublink-worker
 https://github.com/kenzok8/golang
@@ -39,4 +42,5 @@ https://github.com/kiddin9/luci-app-dnsfilter
 https://github.com/kiddin9/china_ip_list
 https://github.com/kiddin9/luci-app-wizard
 https://github.com/kiddin9/luci-app-mihomo
-https://github.com/vernesong/OpenClash
+https://github.com/kiddin9/kwrt-packages
+https://github.com/kiddin9/packages-compile
