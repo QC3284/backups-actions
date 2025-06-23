@@ -25,7 +25,7 @@ jobs:
       - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils pv
+          sudo apt-get install -y xz-utils
 
       - name: Backup and compress repositories
         id: backup
@@ -38,7 +38,13 @@ jobs:
               owner="${BASH_REMATCH[1]}"
               repo="${BASH_REMATCH[2]%.git}"
               backup_dir="backup_temp/$owner-$repo"
-              compressed_file="compressed_backups/$owner-$repo-$(date +%Y%m%d%H%M%S).tar.xz"
+              
+              # 确保压缩目录存在
+              mkdir -p compressed_backups
+              
+              # 使用唯一时间戳避免冲突
+              timestamp=$(date +%Y%m%d%H%M%S)
+              compressed_file="compressed_backups/$owner-$repo-$timestamp.tar.xz"
               
               status=1
               retry_count=0
@@ -53,19 +59,25 @@ jobs:
                 if [ $status -eq 0 ]; then
                   echo "✅ Clone success"
                   
-                  # 修复压缩路径问题
+                  # 修复压缩路径问题 - 使用绝对路径
                   echo "💾 Compressing with maximum compression"
-                  mkdir -p "$(dirname "$compressed_file")"
-                  
-                  # 使用正确的压缩命令
                   (
                     cd "$backup_dir"
-                    tar cf - . | pv | xz -9e -T0 > "../$compressed_file"
+                    # 使用当前工作目录的绝对路径
+                    tar cf - . | xz -9e -T0 > "$GITHUB_WORKSPACE/$compressed_file"
                   )
                   
-                  file_size=$(du -h "$compressed_file" | cut -f1)
-                  echo "📦 Created compressed backup: $compressed_file ($file_size)"
-                  echo "$owner/$repo" >> success_backups.txt
+                  # 检查文件是否创建成功
+                  if [ -f "$compressed_file" ]; then
+                    file_size=$(du -h "$compressed_file" | cut -f1)
+                    echo "📦 Created compressed backup: $compressed_file ($file_size)"
+                    echo "$owner/$repo" >> success_backups.txt
+                  else
+                    echo "❌ Compression failed: file not created"
+                    status=1
+                    retry_count=$((retry_count+1))
+                    continue
+                  fi
                   break
                 else
                   echo "⚠️ Attempt $((retry_count+1)) failed"
@@ -104,6 +116,7 @@ jobs:
             while IFS= read -r repo; do
               if [ -n "$repo" ]; then
                 owner_repo="${repo/\//-}"
+                # 查找匹配的压缩文件
                 compressed_file=$(ls compressed_backups/$owner_repo-*.tar.xz 2>/dev/null | head -1)
                 if [ -f "$compressed_file" ]; then
                   file_size=$(du -h "$compressed_file" | cut -f1)
@@ -138,7 +151,7 @@ jobs:
 
       - name: Create Release
         id: create_release
-        # 修复标签格式：使用无连字符的时间戳
+        # 使用更安全的标签格式
         run: |
           TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
           gh release create "$TAG_NAME" \
