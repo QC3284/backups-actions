@@ -253,6 +253,9 @@ jobs:
             failed_count=$(grep -c '[^[:space:]]' failed_backups.txt)
           fi
           
+          # 计算低磁盘空间事件次数
+          low_disk_count=$(grep -c "Low disk space" $GITHUB_STEP_SUMMARY 2>/dev/null || echo 0)
+          
           # 生成Release正文
           release_body="## 📊 Backup Summary\n\n"
           release_body+="### ✅ Successfully Backed Up ($success_count)\n"
@@ -290,15 +293,18 @@ jobs:
           
           release_body+="\n### 💾 Disk Space Management\n"
           release_body+="- Initial disk cleanup performed\n"
-          release_body+="- Low disk space detected $(grep -c "Low disk space" $GITHUB_STEP_SUMMARY 2>/dev/null || echo 0) times\n"
+          release_body+="- Low disk space detected $low_disk_count times\n"
           release_body+="- Large files (>50MB) uploaded immediately\n"
           
           # 正确设置输出变量
           echo "success_count=$success_count" >> $GITHUB_OUTPUT
           echo "failed_count=$failed_count" >> $GITHUB_OUTPUT
-          echo "release_body<<EOF" >> $GITHUB_OUTPUT
-          echo -e "$release_body" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          
+          # 使用替代方法设置多行输出
+          release_body="${release_body//'%'/'%25'}"
+          release_body="${release_body//$'\n'/'%0A'}"
+          release_body="${release_body//$'\r'/'%0D'}"
+          echo "release_body=$release_body" >> $GITHUB_OUTPUT
 
       - name: Finalize release
         env:
