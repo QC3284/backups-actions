@@ -15,21 +15,17 @@ jobs:
       - name: Checkout current repo
         uses: actions/checkout@v4
 
-      - name: Free Disk Space (Ubuntu)
+      - name: Free Disk Space
         uses: jlumbroso/free-disk-space@main
         with:
-         # this might remove tools that are actually needed,
-         # if set to "true" but frees about 6 GB
-         tool-cache: false
-        
-         # all of these default to true, but feel free to set to
-         # "false" if necessary for your workflow
-         android: true
-         dotnet: true
-         haskell: true
-         large-packages: true
-         docker-images: true
-         swap-storage: true
+          tool-cache: true
+          android-sdk-cache: true
+          dotnet-sdk-cache: true
+          haskell-stack-cache: true
+          pip-cache: true
+          ruby-bundle-cache: true
+          swap-storage: true
+          target-free-space: 10GB
 
       - name: Setup environment
         run: |
@@ -64,6 +60,8 @@ jobs:
 
       - name: Backup and compress repositories with disk management
         id: backup
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 添加环境变量
         run: |
           # 磁盘空间阈值（MB）
           DISK_THRESHOLD=500
@@ -221,6 +219,8 @@ jobs:
           done < back_ck_url.txt
 
       - name: Upload remaining backups
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 添加环境变量
         run: |
           # 上传所有剩余的备份文件
           for file in compressed_backups/*.tar.xz; do
@@ -291,6 +291,8 @@ jobs:
           echo "EOF" >> $GITHUB_OUTPUT
 
       - name: Finalize release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 添加环境变量
         run: |
           # 更新release标题和描述
           gh release edit "${{ steps.release_tag.outputs.tag_name }}" \
@@ -299,8 +301,6 @@ jobs:
           
           # 发布release（取消草稿状态）
           gh release edit "${{ steps.release_tag.outputs.tag_name }}" --draft=false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report status
         run: |
