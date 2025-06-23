@@ -61,7 +61,7 @@ jobs:
       - name: Backup and compress repositories with disk management
         id: backup
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 添加环境变量
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 磁盘空间阈值（MB）
           DISK_THRESHOLD=500
@@ -130,12 +130,12 @@ jobs:
                 echo "🔄 Cloning repository (attempt $((retry_count+1))"
                 rm -rf "$backup_dir" 2>/dev/null || true
                 
-                # 克隆仓库（限制深度以节省空间）
-                git clone --mirror --depth 1 "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
+                # 完整克隆仓库（包含所有分支和提交历史）
+                git clone --mirror "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
                 status=$?
                 
                 if [ $status -eq 0 ]; then
-                  echo "✅ Clone success"
+                  echo "✅ Clone success (full history)"
                   
                   # 获取仓库大小（MB）
                   repo_size=$(du -sm "$backup_dir" | cut -f1)
@@ -220,7 +220,7 @@ jobs:
 
       - name: Upload remaining backups
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 添加环境变量
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 上传所有剩余的备份文件
           for file in compressed_backups/*.tar.xz; do
@@ -242,16 +242,25 @@ jobs:
       - name: Generate Release Summary
         id: release_summary
         run: |
-          success_count=$(grep -c . success_backups.txt 2>/dev/null || echo 0)
-          failed_count=$(grep -c . failed_backups.txt 2>/dev/null || echo 0)
+          # 修复计数问题
+          success_count=0
+          if [ -f success_backups.txt ]; then
+            success_count=$(grep -c '[^[:space:]]' success_backups.txt)
+          fi
           
+          failed_count=0
+          if [ -f failed_backups.txt ]; then
+            failed_count=$(grep -c '[^[:space:]]' failed_backups.txt)
+          fi
+          
+          # 生成Release正文
           release_body="## 📊 Backup Summary\n\n"
           release_body+="### ✅ Successfully Backed Up ($success_count)\n"
           release_body+="| Repository | Size |\n"
           release_body+="|------------|------|\n"
           
           # 从上传记录中获取大小信息
-          if [ -f uploaded_backups.txt ]; then
+          if [ -f uploaded_backups.txt ] && [ -s uploaded_backups.txt ]; then
             while IFS= read -r line; do
               if [ -n "$line" ]; then
                 repo=$(echo "$line" | awk '{print $1}')
@@ -265,7 +274,7 @@ jobs:
           release_body+="| Repository | Reason |\n"
           release_body+="|------------|--------|\n"
           
-          if [ -s failed_backups.txt ]; then
+          if [ -f failed_backups.txt ] && [ -s failed_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ]; then
                 if [[ "$repo" == *"(invalid)" ]]; then
@@ -281,9 +290,10 @@ jobs:
           
           release_body+="\n### 💾 Disk Space Management\n"
           release_body+="- Initial disk cleanup performed\n"
-          release_body+="- Low disk space detected $(grep -c "Low disk space" $GITHUB_STEP_SUMMARY || echo 0) times\n"
+          release_body+="- Low disk space detected $(grep -c "Low disk space" $GITHUB_STEP_SUMMARY 2>/dev/null || echo 0) times\n"
           release_body+="- Large files (>50MB) uploaded immediately\n"
           
+          # 正确设置输出变量
           echo "success_count=$success_count" >> $GITHUB_OUTPUT
           echo "failed_count=$failed_count" >> $GITHUB_OUTPUT
           echo "release_body<<EOF" >> $GITHUB_OUTPUT
@@ -292,7 +302,7 @@ jobs:
 
       - name: Finalize release
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # 添加环境变量
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # 更新release标题和描述
           gh release edit "${{ steps.release_tag.outputs.tag_name }}" \
@@ -309,7 +319,7 @@ jobs:
           echo "| Repository | Size |" >> $GITHUB_STEP_SUMMARY
           echo "|------------|------|" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f uploaded_backups.txt ]; then
+          if [ -f uploaded_backups.txt ] && [ -s uploaded_backups.txt ]; then
             while IFS= read -r line; do
               if [ -n "$line" ]; then
                 repo=$(echo "$line" | awk '{print $1}')
@@ -323,7 +333,7 @@ jobs:
           echo "| Repository | Reason |" >> $GITHUB_STEP_SUMMARY
           echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
           
-          if [ -s failed_backups.txt ]; then
+          if [ -f failed_backups.txt ] && [ -s failed_backups.txt ]; then
             while IFS= read -r repo; do
               if [ -n "$repo" ]; then
                 if [[ "$repo" == *"(invalid)" ]]; then
