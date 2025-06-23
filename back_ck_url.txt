@@ -44,3 +44,10 @@ https://github.com/kiddin9/luci-app-wizard
 https://github.com/kiddin9/luci-app-mihomo
 https://github.com/kiddin9/kwrt-packages
 https://github.com/kiddin9/packages-compile
+https://github.com/yonggekkk/openwrt_win64-ddns-cdnip
+https://github.com/liuran001/openwrt-packages
+https://github.com/NueXini/NueXini_Packages
+https://github.com/haiibo/openwrt-packages
+https://github.com/OpenWrt-Actions/helloworld
+https://github.com/zlwu/helloworld-dist
+https://github.com/peditx/SshPlus
