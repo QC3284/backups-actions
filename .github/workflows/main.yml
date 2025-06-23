@@ -1,4 +1,4 @@
-name: Repository Backup and Release
+name: Repository Backup and Release with Disk Management
 
 on:
   workflow_dispatch:
@@ -15,21 +15,82 @@ jobs:
       - name: Checkout current repo
         uses: actions/checkout@v4
 
+      - name: Free Disk Space
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # 清理各种缓存和临时文件
+          tool-cache: true
+          android-sdk-cache: true
+          dotnet-sdk-cache: true
+          haskell-stack-cache: true
+          pip-cache: true
+          ruby-bundle-cache: true
+          swap-storage: true
+          # 保留至少10GB空间
+          target-free-space: 10GB
+
       - name: Setup environment
         run: |
           mkdir -p backup_temp
           mkdir -p compressed_backups
           echo "" > success_backups.txt
           echo "" > failed_backups.txt
+          echo "" > uploaded_backups.txt
+          echo "" > pending_backups.txt
 
       - name: Install required tools
         run: |
           sudo apt-get update
-          sudo apt-get install -y xz-utils
+          sudo apt-get install -y xz-utils bc pv jq
 
-      - name: Backup and compress repositories
+      - name: Generate release tag
+        id: release_tag
+        run: |
+          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "release_title=📦 Repository Backups $(date -u +'%Y-%m-%d %H:%M:%S UTC')" >> $GITHUB_OUTPUT
+
+      - name: Create draft release
+        id: create_release
+        run: |
+          gh release create "${{ steps.release_tag.outputs.tag_name }}" \
+            --title "${{ steps.release_tag.outputs.release_title }}" \
+            --notes "🚧 Backup in progress..." \
+            --draft
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Backup and compress repositories with disk management
         id: backup
         run: |
+          # 磁盘空间阈值（MB）
+          DISK_THRESHOLD=500
+          
+          # 获取当前磁盘可用空间（MB）
+          get_disk_space() {
+            df -BM . | awk 'NR==2 {print $4}' | sed 's/M//'
+          }
+          
+          # 上传备份文件函数
+          upload_backup() {
+            local file=$1
+            local repo_info=$2
+            
+            echo "📤 Uploading $file"
+            if gh release upload "${{ steps.release_tag.outputs.tag_name }}" "$file" \
+                 --repo $GITHUB_REPOSITORY \
+                 --clobber; then
+              echo "✅ Upload success"
+              echo "$repo_info $(du -h "$file" | cut -f1)" >> uploaded_backups.txt
+              rm -f "$file"
+              return 0
+            else
+              echo "❌ Upload failed"
+              return 1
+            fi
+          }
+          
+          # 处理每个仓库URL
           while IFS= read -r repo_url; do
             [[ -z "$repo_url" || "$repo_url" == \#* ]] && continue
             echo "📦 Processing: $repo_url"
@@ -38,13 +99,28 @@ jobs:
               owner="${BASH_REMATCH[1]}"
               repo="${BASH_REMATCH[2]%.git}"
               backup_dir="backup_temp/$owner-$repo"
+              compressed_file="compressed_backups/$owner-$repo-$(date +%Y%m%d%H%M%S).tar.xz"
               
-              # 确保压缩目录存在
-              mkdir -p compressed_backups
+              # 检查磁盘空间
+              disk_space=$(get_disk_space)
+              echo "💽 Current disk space: ${disk_space}MB (threshold: ${DISK_THRESHOLD}MB)"
               
-              # 使用唯一时间戳避免冲突
-              timestamp=$(date +%Y%m%d%H%M%S)
-              compressed_file="compressed_backups/$owner-$repo-$timestamp.tar.xz"
+              # 如果磁盘空间不足，上传部分备份
+              if [ "$disk_space" -lt "$DISK_THRESHOLD" ]; then
+                echo "⚠️ Low disk space! Uploading pending backups..."
+                
+                # 上传所有待处理备份
+                for file in compressed_backups/*.tar.xz; do
+                  if [ -f "$file" ]; then
+                    repo_name=$(basename "$file" | cut -d'-' -f1,2)
+                    upload_backup "$file" "$repo_name"
+                  fi
+                done
+                
+                # 再次检查磁盘空间
+                disk_space=$(get_disk_space)
+                echo "💽 Freed space. Now: ${disk_space}MB"
+              fi
               
               status=1
               retry_count=0
@@ -53,32 +129,72 @@ jobs:
               while [ $status -ne 0 ] && [ $retry_count -lt $max_retries ]; do
                 echo "🔄 Cloning repository (attempt $((retry_count+1))"
                 rm -rf "$backup_dir" 2>/dev/null || true
-                git clone --mirror "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
+                
+                # 克隆仓库（限制深度以节省空间）
+                git clone --mirror --depth 1 "$repo_url" "$backup_dir" 2>&1 | sed 's/^/    /'
                 status=$?
                 
                 if [ $status -eq 0 ]; then
                   echo "✅ Clone success"
                   
-                  # 修复压缩路径问题 - 使用绝对路径
+                  # 获取仓库大小（MB）
+                  repo_size=$(du -sm "$backup_dir" | cut -f1)
+                  echo "📊 Repository size: ${repo_size}MB"
+                  
+                  # 检查是否有足够空间进行压缩（估算压缩后大小）
+                  estimated_compressed_size=$((repo_size / 2))
+                  if [ "$disk_space" -lt "$estimated_compressed_size" ]; then
+                    echo "⚠️ Not enough space for compression (needed ~${estimated_compressed_size}MB)"
+                    
+                    # 尝试上传现有备份释放空间
+                    for file in compressed_backups/*.tar.xz; do
+                      if [ -f "$file" ]; then
+                        repo_name=$(basename "$file" | cut -d'-' -f1,2)
+                        upload_backup "$file" "$repo_name"
+                      fi
+                    done
+                    
+                    # 再次检查空间
+                    disk_space=$(get_disk_space)
+                    if [ "$disk_space" -lt "$estimated_compressed_size" ]; then
+                      echo "❌ Still not enough space after cleanup. Skipping..."
+                      echo "$owner/$repo" >> failed_backups.txt
+                      status=1
+                      break
+                    fi
+                  fi
+                  
+                  # 压缩仓库
                   echo "💾 Compressing with maximum compression"
+                  mkdir -p "$(dirname "$compressed_file")"
+                  
                   (
                     cd "$backup_dir"
-                    # 使用当前工作目录的绝对路径
-                    tar cf - . | xz -9e -T0 > "$GITHUB_WORKSPACE/$compressed_file"
+                    tar cf - . | pv -s "$(du -sb . | cut -f1)" | xz -9e -T0 > "$GITHUB_WORKSPACE/$compressed_file"
                   )
                   
-                  # 检查文件是否创建成功
+                  # 检查压缩结果
                   if [ -f "$compressed_file" ]; then
                     file_size=$(du -h "$compressed_file" | cut -f1)
                     echo "📦 Created compressed backup: $compressed_file ($file_size)"
                     echo "$owner/$repo" >> success_backups.txt
+                    echo "$owner/$repo $file_size" >> pending_backups.txt
+                    
+                    # 立即上传大文件（>50MB）
+                    file_size_mb=$(du -m "$compressed_file" | cut -f1)
+                    if [ "$file_size_mb" -gt 50 ]; then
+                      echo "🚀 Uploading large file immediately (>50MB)"
+                      if upload_backup "$compressed_file" "$owner/$repo"; then
+                        # 从待处理列表中移除
+                        sed -i "/$owner\/repo/d" pending_backups.txt
+                      fi
+                    fi
+                    
+                    break
                   else
                     echo "❌ Compression failed: file not created"
                     status=1
-                    retry_count=$((retry_count+1))
-                    continue
                   fi
-                  break
                 else
                   echo "⚠️ Attempt $((retry_count+1)) failed"
                   retry_count=$((retry_count+1))
@@ -102,46 +218,69 @@ jobs:
             echo "--------------------------------------------------"
           done < back_ck_url.txt
 
+      - name: Upload remaining backups
+        run: |
+          # 上传所有剩余的备份文件
+          for file in compressed_backups/*.tar.xz; do
+            if [ -f "$file" ]; then
+              repo_name=$(basename "$file" | cut -d'-' -f1,2)
+              echo "📤 Uploading $file"
+              if gh release upload "${{ steps.release_tag.outputs.tag_name }}" "$file" \
+                   --repo $GITHUB_REPOSITORY \
+                   --clobber; then
+                echo "✅ Upload success"
+                echo "$repo_name $(du -h "$file" | cut -f1)" >> uploaded_backups.txt
+                rm -f "$file"
+              else
+                echo "❌ Upload failed"
+              fi
+            fi
+          done
+
       - name: Generate Release Summary
         id: release_summary
         run: |
           success_count=$(grep -c . success_backups.txt 2>/dev/null || echo 0)
           failed_count=$(grep -c . failed_backups.txt 2>/dev/null || echo 0)
           
-          release_body="#### 📊 Backup Summary\n"
-          release_body+="| Status | Repository | Size |\n"
-          release_body+="|--------|------------|------|\n"
+          release_body="## 📊 Backup Summary\n\n"
+          release_body+="### ✅ Successfully Backed Up ($success_count)\n"
+          release_body+="| Repository | Size |\n"
+          release_body+="|------------|------|\n"
           
-          if [ -s success_backups.txt ]; then
-            while IFS= read -r repo; do
-              if [ -n "$repo" ]; then
-                owner_repo="${repo/\//-}"
-                # 查找匹配的压缩文件
-                compressed_file=$(ls compressed_backups/$owner_repo-*.tar.xz 2>/dev/null | head -1)
-                if [ -f "$compressed_file" ]; then
-                  file_size=$(du -h "$compressed_file" | cut -f1)
-                  release_body+="| ✅ | $repo | $file_size |\n"
-                else
-                  release_body+="| ✅ | $repo | N/A |\n"
-                fi
+          # 从上传记录中获取大小信息
+          if [ -f uploaded_backups.txt ]; then
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then
+                repo=$(echo "$line" | awk '{print $1}')
+                size=$(echo "$line" | awk '{print $2}')
+                release_body+="| $repo | $size |\n"
               fi
-            done < success_backups.txt
+            done < uploaded_backups.txt
           fi
+          
+          release_body+="\n### ❌ Failed to Backup ($failed_count)\n"
+          release_body+="| Repository | Reason |\n"
+          release_body+="|------------|--------|\n"
           
           if [ -s failed_backups.txt ]; then
             while IFS= read -r repo; do
-              if [ -n "$repo" ] && [[ ! "$repo" == *"(invalid)" ]]; then
-                release_body+="| ❌ | $repo | - |\n"
-              elif [[ "$repo" == *"(invalid)" ]]; then
-                release_body+="| ⚠️ | ${repo% (invalid)} | - |\n"
+              if [ -n "$repo" ]; then
+                if [[ "$repo" == *"(invalid)" ]]; then
+                  release_body+="| ${repo% (invalid)} | Invalid URL |\n"
+                else
+                  release_body+="| $repo | Backup failed |\n"
+                fi
               fi
             done < failed_backups.txt
+          else
+            release_body+="| - | All backups succeeded |\n"
           fi
           
-          release_body+="\n#### 📦 Compressed Backup Files:\n"
-          release_body+="\`\`\`\n"
-          release_body+="$(ls -lh compressed_backups/ 2>/dev/null || echo "No files")\n"
-          release_body+="\`\`\`\n"
+          release_body+="\n### 💾 Disk Space Management\n"
+          release_body+="- Initial disk cleanup performed\n"
+          release_body+="- Low disk space detected $(grep -c "Low disk space" $GITHUB_STEP_SUMMARY || echo 0) times\n"
+          release_body+="- Large files (>50MB) uploaded immediately\n"
           
           echo "success_count=$success_count" >> $GITHUB_OUTPUT
           echo "failed_count=$failed_count" >> $GITHUB_OUTPUT
@@ -149,77 +288,57 @@ jobs:
           echo -e "$release_body" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
 
-      - name: Create Release
-        id: create_release
-        # 使用更安全的标签格式
+      - name: Finalize release
         run: |
-          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
-          gh release create "$TAG_NAME" \
-            --title "📦 Repository Backups $(date -u +'%Y-%m-%d %H:%M:%S UTC')" \
-            --notes "Automated repository backups" \
-            --draft
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload Backup Assets
-        run: |
-          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
-          for file in compressed_backups/*; do
-            if [ -f "$file" ]; then
-              echo "📤 Uploading $file"
-              gh release upload "$TAG_NAME" "$file" \
-                --repo $GITHUB_REPOSITORY \
-                --clobber
-            fi
-          done
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update Release Description
-        run: |
-          TAG_NAME="backup-$(date +%Y%m%d%H%M%S)"
-          # 获取当前release ID
-          RELEASE_ID=$(gh api repos/$GITHUB_REPOSITORY/releases/tags/$TAG_NAME --jq '.id')
+          # 更新release标题和描述
+          gh release edit "${{ steps.release_tag.outputs.tag_name }}" \
+            --title "${{ steps.release_tag.outputs.release_title }}" \
+            --notes "${{ steps.release_summary.outputs.release_body }}"
           
-          # 更新release描述
-          gh api repos/$GITHUB_REPOSITORY/releases/$RELEASE_ID \
-            -X PATCH \
-            -f body="${{ steps.release_summary.outputs.release_body }}"
+          # 发布release（取消草稿状态）
+          gh release edit "${{ steps.release_tag.outputs.tag_name }}" --draft=false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Report status
         run: |
           echo "## 📊 Backup Summary" >> $GITHUB_STEP_SUMMARY
-          echo "| Status | Repository | Size |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|------------|------|" >> $GITHUB_STEP_SUMMARY
+          echo "### ✅ Successfully Backed Up (${{ steps.release_summary.outputs.success_count }})" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | Size |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|------|" >> $GITHUB_STEP_SUMMARY
           
-          if [ -s success_backups.txt ]; then
-            while IFS= read -r repo; do
-              if [ -n "$repo" ]; then
-                owner_repo="${repo/\//-}"
-                compressed_file=$(ls compressed_backups/$owner_repo-*.tar.xz 2>/dev/null | head -1)
-                if [ -f "$compressed_file" ]; then
-                  file_size=$(du -h "$compressed_file" | cut -f1)
-                  echo "| ✅ | $repo | $file_size |" >> $GITHUB_STEP_SUMMARY
-                else
-                  echo "| ✅ | $repo | N/A |" >> $GITHUB_STEP_SUMMARY
-                fi
+          if [ -f uploaded_backups.txt ]; then
+            while IFS= read -r line; do
+              if [ -n "$line" ]; then
+                repo=$(echo "$line" | awk '{print $1}')
+                size=$(echo "$line" | awk '{print $2}')
+                echo "| $repo | $size |" >> $GITHUB_STEP_SUMMARY
               fi
-            done < success_backups.txt
+            done < uploaded_backups.txt
           fi
+          
+          echo "### ❌ Failed to Backup (${{ steps.release_summary.outputs.failed_count }})" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | Reason |" >> $GITHUB_STEP_SUMMARY
+          echo "|------------|--------|" >> $GITHUB_STEP_SUMMARY
           
           if [ -s failed_backups.txt ]; then
             while IFS= read -r repo; do
-              if [ -n "$repo" ] && [[ ! "$repo" == *"(invalid)" ]]; then
-                echo "| ❌ | $repo | - |" >> $GITHUB_STEP_SUMMARY
-              elif [[ "$repo" == *"(invalid)" ]]; then
-                echo "| ⚠️ | ${repo% (invalid)} | - |" >> $GITHUB_STEP_SUMMARY
+              if [ -n "$repo" ]; then
+                if [[ "$repo" == *"(invalid)" ]]; then
+                  echo "| ${repo% (invalid)} | Invalid URL |" >> $GITHUB_STEP_SUMMARY
+                else
+                  echo "| $repo | Backup failed |" >> $GITHUB_STEP_SUMMARY
+                fi
               fi
             done < failed_backups.txt
+          else
+            echo "| - | All backups succeeded |" >> $GITHUB_STEP_SUMMARY
           fi
           
-          echo "### 📝 Summary" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Success: ${{ steps.release_summary.outputs.success_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ Failed: ${{ steps.release_summary.outputs.failed_count }}" >> $GITHUB_STEP_SUMMARY
-          echo "- 🕒 Time: $((SECONDS / 60))m $((SECONDS % 60))s" >> $GITHUB_STEP_SUMMARY
+          release_url="https://github.com/$GITHUB_REPOSITORY/releases/tag/${{ steps.release_tag.outputs.tag_name }}"
+          echo "### 📦 Release Created" >> $GITHUB_STEP_SUMMARY
+          echo "[View Release]($release_url)" >> $GITHUB_STEP_SUMMARY
+          echo "### 💾 Disk Space Usage" >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
+          df -h . >> $GITHUB_STEP_SUMMARY
+          echo "```" >> $GITHUB_STEP_SUMMARY
