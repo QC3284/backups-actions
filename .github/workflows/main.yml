@@ -19,13 +19,10 @@ jobs:
       # 初始化环境
       - name: Setup environment
         run: |
-          # 创建必要的目录结构
           mkdir -p backup_temp compressed_backups
           : > success.txt; : > failed.txt
           sudo apt-get update
           sudo apt-get install -y zstd
-          
-          # 设置工作区绝对路径
           echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
 
       # 创建发布
@@ -62,7 +59,7 @@ jobs:
               dir="backup_temp/$owner-$repo"
               file="compressed_backups/$owner-$repo-$(date +%s).tar.zst"
               
-              # 磁盘检查（增加二次检查）
+              # 磁盘检查
               space=$(disk_space)
               if [[ $space -lt 500 ]]; then
                 for f in compressed_backups/*.tar.zst; do
@@ -79,7 +76,7 @@ jobs:
                 }
               fi
               
-              # 克隆仓库（增加超时和重试）
+              # 克隆仓库
               for i in {1..3}; do
                 rm -rf "$dir"
                 timeout 600 git clone --mirror "$url" "$dir" && break
@@ -93,22 +90,20 @@ jobs:
               # 确保压缩目录存在
               mkdir -p compressed_backups
               
-              # 压缩仓库（使用绝对路径）
-              if (cd "$dir" && tar cf - . | zstd -22 --ultra -T0 > "../$file"); then
+              # 修复路径问题：使用绝对路径进行压缩
+              if (cd "$dir" && tar cf - . | zstd -22 --ultra -T0 > "${WORKSPACE}/$file"); then
                 echo "$owner/$repo" >> success.txt
-                # 立即清理克隆目录
                 rm -rf "$dir"
               else
                 echo "$owner/$repo" >> failed.txt
                 echo "❌ Compression failed"
-                # 清理失败的压缩文件
-                [[ -f "../$file" ]] && rm -f "../$file"
+                [[ -f "${WORKSPACE}/$file" ]] && rm -f "${WORKSPACE}/$file"
                 continue
               fi
               
               # 上传大文件（>50MB）
-              if [[ -f "$file" ]] && [[ $(du -m "$file" | cut -f1) -gt 50 ]]; then
-                gh release upload $TAG "$file" --clobber && rm -f "$file"
+              if [[ -f "${WORKSPACE}/$file" ]] && [[ $(du -m "${WORKSPACE}/$file" | cut -f1) -gt 50 ]]; then
+                gh release upload $TAG "${WORKSPACE}/$file" --clobber && rm -f "${WORKSPACE}/$file"
               fi
             else
               echo "$url" >> failed.txt
@@ -116,15 +111,12 @@ jobs:
             fi
           done < back_ck_url.txt
 
-      # 上传剩余文件（增加错误处理）
+      # 上传剩余文件
       - name: Upload remaining
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.create_release.outputs.tag }}
         run: |
-          # 确保目录存在
-          mkdir -p compressed_backups
-          
           for file in compressed_backups/*.tar.zst; do
             if [[ -f "$file" ]]; then
               if gh release upload $TAG "$file" --clobber; then
@@ -139,9 +131,7 @@ jobs:
       - name: Generate report
         id: report
         run: |
-          # 处理可能的空文件
           touch success.txt failed.txt
-          
           success_count=$(wc -l < success.txt | tr -d ' ' || echo 0)
           failed_count=$(wc -l < failed.txt | tr -d ' ' || echo 0)
           
@@ -175,11 +165,8 @@ jobs:
           TAG: ${{ steps.create_release.outputs.tag }}
           REPORT: ${{ steps.report.outputs.report }}
         run: |
-          # 解码报告
           body="${REPORT//'%0A'/$'\n'}"
           body="${body//'%25'/'%'}"
-          
-          # 更新并发布
           gh release edit $TAG --notes "$body" --draft=false
 
       # 状态摘要
