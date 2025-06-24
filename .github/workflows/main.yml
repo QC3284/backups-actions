@@ -12,6 +12,10 @@ jobs:
   backup-and-release:
     runs-on: ubuntu-latest
     steps:
+      # 关键修复：首先检出当前仓库
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       # 初始化环境
       - name: Setup environment
         run: |
@@ -24,12 +28,7 @@ jobs:
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
-          # this might remove tools that are actually needed,
-          # if set to "true" but frees about 6 GB
           tool-cache: false
-        
-          # all of these default to true, but feel free to set to
-          # "false" if necessary for your workflow
           android: true
           dotnet: true
           haskell: true
@@ -37,7 +36,7 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      # 创建发布
+      # 创建发布 (修复Git仓库上下文问题)
       - name: Create release
         id: create_release
         run: |
