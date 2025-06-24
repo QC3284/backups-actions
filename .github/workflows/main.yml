@@ -12,31 +12,23 @@ jobs:
   backup-and-release:
     runs-on: ubuntu-latest
     steps:
-      # 关键修复：首先检出当前仓库
+      # 检出当前仓库
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # 初始化环境
       - name: Setup environment
         run: |
+          # 创建必要的目录结构
           mkdir -p backup_temp compressed_backups
           : > success.txt; : > failed.txt
           sudo apt-get update
           sudo apt-get install -y zstd
+          
+          # 设置工作区绝对路径
+          echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
 
-      # 磁盘清理
-      - name: Free Disk Space (Ubuntu)
-        uses: jlumbroso/free-disk-space@main
-        with:
-          tool-cache: false
-          android: true
-          dotnet: true
-          haskell: true
-          large-packages: true
-          docker-images: true
-          swap-storage: true
-
-      # 创建发布 (修复Git仓库上下文问题)
+      # 创建发布
       - name: Create release
         id: create_release
         run: |
@@ -74,7 +66,9 @@ jobs:
               space=$(disk_space)
               if [[ $space -lt 500 ]]; then
                 for f in compressed_backups/*.tar.zst; do
-                  gh release upload $TAG "$f" --clobber && rm -f "$f"
+                  if [[ -f "$f" ]]; then
+                    gh release upload $TAG "$f" --clobber && rm -f "$f"
+                  fi
                 done
                 # 上传后再次检查空间
                 space=$(disk_space)
@@ -85,18 +79,21 @@ jobs:
                 }
               fi
               
-              # 克隆仓库（增加超时）
+              # 克隆仓库（增加超时和重试）
               for i in {1..3}; do
                 rm -rf "$dir"
-                timeout 300 git clone --mirror "$url" "$dir" && break
-                [[ $i -lt 3 ]] && sleep 10
+                timeout 600 git clone --mirror "$url" "$dir" && break
+                [[ $i -lt 3 ]] && sleep 20
               done || {
                 echo "$owner/$repo" >> failed.txt
                 echo "❌ Clone failed after 3 attempts"
                 continue
               }
               
-              # 压缩仓库（增加错误处理）
+              # 确保压缩目录存在
+              mkdir -p compressed_backups
+              
+              # 压缩仓库（使用绝对路径）
               if (cd "$dir" && tar cf - . | zstd -22 --ultra -T0 > "../$file"); then
                 echo "$owner/$repo" >> success.txt
                 # 立即清理克隆目录
@@ -104,12 +101,13 @@ jobs:
               else
                 echo "$owner/$repo" >> failed.txt
                 echo "❌ Compression failed"
-                rm -f "../$file"
+                # 清理失败的压缩文件
+                [[ -f "../$file" ]] && rm -f "../$file"
                 continue
               fi
               
               # 上传大文件（>50MB）
-              if [[ $(du -m "$file" | cut -f1) -gt 50 ]]; then
+              if [[ -f "$file" ]] && [[ $(du -m "$file" | cut -f1) -gt 50 ]]; then
                 gh release upload $TAG "$file" --clobber && rm -f "$file"
               fi
             else
@@ -124,31 +122,44 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.create_release.outputs.tag }}
         run: |
+          # 确保目录存在
+          mkdir -p compressed_backups
+          
           for file in compressed_backups/*.tar.zst; do
-            if ! gh release upload $TAG "$file" --clobber; then
-              echo "❌ Failed to upload ${file##*/}" >&2
-            else
-              rm -f "$file"
+            if [[ -f "$file" ]]; then
+              if gh release upload $TAG "$file" --clobber; then
+                rm -f "$file"
+              else
+                echo "❌ Failed to upload ${file}" >&2
+              fi
             fi
           done
 
-      # 生成报告（修复计数逻辑）
+      # 生成报告
       - name: Generate report
         id: report
         run: |
-          success_count=$(wc -l < success.txt 2>/dev/null | tr -d ' ' || echo 0)
-          failed_count=$(grep -cv '^$' failed.txt 2>/dev/null | tr -d ' ' || echo 0)
+          # 处理可能的空文件
+          touch success.txt failed.txt
+          
+          success_count=$(wc -l < success.txt | tr -d ' ' || echo 0)
+          failed_count=$(wc -l < failed.txt | tr -d ' ' || echo 0)
           
           report="## 📊 Backup Summary\n\n"
           report+="### ✅ Success ($success_count)\n"
-          [[ $success_count -gt 0 ]] && \
-            report+=$(awk '{print "| " $0 " |"}' success.txt) || \
+          if [[ $success_count -gt 0 ]]; then
+            report+=$(awk '{print "| " $0 " |"}' success.txt)
+          else
             report+="No successful backups\n"
+          fi
           
           report+="\n### ❌ Failed ($failed_count)\n"
-          [[ $failed_count -gt 0 ]] && \
-            report+="| Repository | Error |\n|------------|-------|\n$(awk '{print "| " $0 " | Backup failed |"}' failed.txt)" || \
+          if [[ $failed_count -gt 0 ]]; then
+            report+="| Repository | Error |\n|------------|-------|\n"
+            report+=$(awk '{print "| " $0 " | Backup failed |"}' failed.txt)
+          else
             report+="No failed backups\n"
+          fi
           
           # 编码输出
           report="${report//'%'/'%25'}"
@@ -171,7 +182,7 @@ jobs:
           # 更新并发布
           gh release edit $TAG --notes "$body" --draft=false
 
-      # 状态摘要（修复计数显示）
+      # 状态摘要
       - name: Status summary
         run: |
           echo "## Backup Results" >> $GITHUB_STEP_SUMMARY
