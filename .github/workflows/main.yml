@@ -19,11 +19,11 @@ jobs:
       # 初始化环境
       - name: Setup environment
         run: |
-          mkdir -p backup_temp compressed_backups
-          : > success.txt; : > failed.txt
           sudo apt-get update
-          sudo apt-get install -y zstd
+          sudo apt-get install -y zstd pv jq
+          mkdir -p backup_temp compressed_backups
           echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
+          : > success.txt; : > failed.txt
 
       # 创建发布
       - name: Create release
@@ -38,7 +38,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 核心备份流程
+      # 核心备份流程 - 重构版本
       - name: Backup repositories
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -46,6 +46,21 @@ jobs:
         run: |
           # 工具函数
           disk_space() { df -BM . | awk 'NR==2 {print $4}' | tr -d 'M'; }
+          check_disk_space() {
+            local required=$1
+            local space=$(disk_space)
+            if [[ $space -lt $required ]]; then
+              echo "⚠️ 低磁盘空间: ${space}MB < ${required}MB"
+              # 尝试上传现有文件释放空间
+              for f in compressed_backups/*.tar.zst; do
+                [[ -f "$f" ]] && gh release upload $TAG "$f" --clobber && rm -f "$f"
+              done
+              # 重新检查
+              space=$(disk_space)
+              [[ $space -lt $required ]] && return 1
+            fi
+            return 0
+          }
           
           # 处理每个仓库
           while read -r url; do
@@ -59,55 +74,77 @@ jobs:
               dir="backup_temp/$owner-$repo"
               file="compressed_backups/$owner-$repo-$(date +%s).tar.zst"
               
-              # 磁盘检查
-              space=$(disk_space)
-              if [[ $space -lt 500 ]]; then
-                for f in compressed_backups/*.tar.zst; do
-                  if [[ -f "$f" ]]; then
-                    gh release upload $TAG "$f" --clobber && rm -f "$f"
-                  fi
-                done
-                # 上传后再次检查空间
-                space=$(disk_space)
-                [[ $space -lt 500 ]] && {
-                  echo "$owner/$repo" >> failed.txt
-                  echo "⚠️ Skipping due to low disk space"
-                  continue
-                }
+              # 磁盘检查 (更保守的空间管理)
+              if ! check_disk_space 2000; then
+                echo "$owner/$repo" >> failed.txt
+                echo "❌ 磁盘空间不足，跳过仓库"
+                continue
               fi
               
-              # 克隆仓库
-              for i in {1..3}; do
+              # 克隆仓库 (带进度显示)
+              echo "🔄 克隆仓库 (尝试 1/3)..."
+              if ! timeout 600 git clone --mirror "$url" "$dir" 2>&1 | tee clone.log; then
+                # 克隆失败处理
+                echo "🔄 克隆失败，重试 (尝试 2/3)..."
+                sleep 10
                 rm -rf "$dir"
-                timeout 600 git clone --mirror "$url" "$dir" && break
-                [[ $i -lt 3 ]] && sleep 20
-              done || {
+                if ! timeout 600 git clone --mirror "$url" "$dir" 2>&1 | tee clone.log; then
+                  echo "🔄 克隆失败，重试 (尝试 3/3)..."
+                  sleep 15
+                  rm -rf "$dir"
+                  if ! timeout 600 git clone --mirror "$url" "$dir" 2>&1 | tee clone.log; then
+                    echo "$owner/$repo" >> failed.txt
+                    echo "❌ 克隆失败"
+                    continue
+                  fi
+                fi
+              fi
+              
+              # 检查克隆大小
+              repo_size=$(du -sm "$dir" | cut -f1)
+              echo "📊 仓库大小: ${repo_size}MB"
+              
+              # 磁盘空间二次检查 (考虑压缩所需空间)
+              if ! check_disk_space $((repo_size * 2)); then
                 echo "$owner/$repo" >> failed.txt
-                echo "❌ Clone failed after 3 attempts"
+                echo "❌ 压缩空间不足，跳过"
+                rm -rf "$dir"
                 continue
-              }
+              fi
               
-              # 确保压缩目录存在
+              # 压缩仓库 (使用pv显示进度)
+              echo "🗜️ 压缩仓库..."
               mkdir -p compressed_backups
-              
-              # 修复路径问题：使用绝对路径进行压缩
-              if (cd "$dir" && tar cf - . | zstd -22 --ultra -T0 > "${WORKSPACE}/$file"); then
+              if (cd "$dir" && tar cf - . | pv -s ${repo_size}m | zstd -10 -T0 > "${WORKSPACE}/$file"); then
                 echo "$owner/$repo" >> success.txt
                 rm -rf "$dir"
+                
+                # 检查压缩文件
+                if [[ ! -f "${WORKSPACE}/$file" ]]; then
+                  echo "❌ 压缩文件未创建"
+                  echo "$owner/$repo" >> failed.txt
+                  continue
+                fi
+                
+                # 上传大文件
+                file_size=$(du -m "${WORKSPACE}/$file" | cut -f1)
+                if [[ $file_size -gt 50 ]]; then
+                  echo "⬆️ 上传大文件 (${file_size}MB)..."
+                  if gh release upload $TAG "${WORKSPACE}/$file" --clobber; then
+                    rm -f "${WORKSPACE}/$file"
+                  else
+                    echo "⚠️ 上传失败，保留文件稍后上传"
+                  fi
+                fi
               else
                 echo "$owner/$repo" >> failed.txt
-                echo "❌ Compression failed"
+                echo "❌ 压缩失败"
                 [[ -f "${WORKSPACE}/$file" ]] && rm -f "${WORKSPACE}/$file"
-                continue
-              fi
-              
-              # 上传大文件（>50MB）
-              if [[ -f "${WORKSPACE}/$file" ]] && [[ $(du -m "${WORKSPACE}/$file" | cut -f1) -gt 50 ]]; then
-                gh release upload $TAG "${WORKSPACE}/$file" --clobber && rm -f "${WORKSPACE}/$file"
+                rm -rf "$dir"
               fi
             else
               echo "$url" >> failed.txt
-              echo "❌ Invalid URL format"
+              echo "❌ 无效URL格式"
             fi
           done < back_ck_url.txt
 
@@ -119,10 +156,11 @@ jobs:
         run: |
           for file in compressed_backups/*.tar.zst; do
             if [[ -f "$file" ]]; then
+              echo "⬆️ 上传剩余文件: $(basename "$file")"
               if gh release upload $TAG "$file" --clobber; then
                 rm -f "$file"
               else
-                echo "❌ Failed to upload ${file}" >&2
+                echo "❌ 上传失败: $(basename "$file")"
               fi
             fi
           done
@@ -135,20 +173,21 @@ jobs:
           success_count=$(wc -l < success.txt | tr -d ' ' || echo 0)
           failed_count=$(wc -l < failed.txt | tr -d ' ' || echo 0)
           
-          report="## 📊 Backup Summary\n\n"
-          report+="### ✅ Success ($success_count)\n"
+          report="## 📊 备份摘要\n\n"
+          report+="### ✅ 成功 ($success_count)\n"
           if [[ $success_count -gt 0 ]]; then
+            report+="| 仓库 |\n|------|\n"
             report+=$(awk '{print "| " $0 " |"}' success.txt)
           else
-            report+="No successful backups\n"
+            report+="无成功备份\n"
           fi
           
-          report+="\n### ❌ Failed ($failed_count)\n"
+          report+="\n### ❌ 失败 ($failed_count)\n"
           if [[ $failed_count -gt 0 ]]; then
-            report+="| Repository | Error |\n|------------|-------|\n"
-            report+=$(awk '{print "| " $0 " | Backup failed |"}' failed.txt)
+            report+="| 仓库 | 错误 |\n|------|------|\n"
+            report+=$(awk '{print "| " $0 " | 备份失败 |"}' failed.txt)
           else
-            report+="No failed backups\n"
+            report+="无失败备份\n"
           fi
           
           # 编码输出
@@ -172,8 +211,8 @@ jobs:
       # 状态摘要
       - name: Status summary
         run: |
-          echo "## Backup Results" >> $GITHUB_STEP_SUMMARY
-          echo "- ✅ Success: ${{ steps.report.outputs.success }}" >> $GITHUB_STEP_SUMMARY
-          echo "- ❌ Failed: ${{ steps.report.outputs.failed }}" >> $GITHUB_STEP_SUMMARY
+          echo "## 备份结果" >> $GITHUB_STEP_SUMMARY
+          echo "- ✅ 成功: ${{ steps.report.outputs.success }}" >> $GITHUB_STEP_SUMMARY
+          echo "- ❌ 失败: ${{ steps.report.outputs.failed }}" >> $GITHUB_STEP_SUMMARY
           url="https://github.com/$GITHUB_REPOSITORY/releases/tag/${{ steps.create_release.outputs.tag }}"
-          echo "📦 [View Release]($url)" >> $GITHUB_STEP_SUMMARY
+          echo "📦 [查看发布]($url)" >> $GITHUB_STEP_SUMMARY
