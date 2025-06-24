@@ -41,7 +41,6 @@ https://github.com/kiddin9/luci-app-mihomo
 https://github.com/zlwu/helloworld-dist
 https://github.com/peditx/SshPlus
 https://github.com/Aethersailor/Custom_OpenClash_Rules
-https://github.com/Aethersailor/dnsmasq-china-list
 https://github.com/Aethersailor/domain-list-community
 https://github.com/Aethersailor/Custom_Shadowrocket_Rules
 https://github.com/Aethersailor/Custom_Clash_Rules
