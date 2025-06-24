@@ -1,5 +1,7 @@
 https://github.com/clashdownload/Clash
 https://github.com/qC3284/clash-gz
+https://github.com/QC3284/openwrt-actions-config
+https://github.com/QC3284/openwrt-actions
 https://github.com/MetaCubeX/mihomo
 https://github.com/vernesong/mihomo
 https://github.com/dler-io/Rules
@@ -45,3 +47,4 @@ https://github.com/Aethersailor/domain-list-community
 https://github.com/Aethersailor/Custom_Shadowrocket_Rules
 https://github.com/Aethersailor/Custom_Clash_Rules
 https://github.com/Aethersailor/Stop-Ask-Questions-The-Stupid-Ways
+https://github.com/8680/GOODBYEADS
