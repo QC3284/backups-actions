@@ -59,7 +59,6 @@ https://github.com/OpenListTeam/cf-worker-api
 https://github.com/OpenListTeam/openlist-desktop-service
 https://github.com/OpenListTeam/go-cache
 https://github.com/OpenListTeam/rateg
-https://github.com/OpenListTeam/.github
 https://github.com/OpenListTeam/ocr_api_server
 https://github.com/OpenListTeam/times
 https://github.com/OpenListTeam/gofakes3
