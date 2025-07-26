@@ -75,3 +75,5 @@ https://github.com/OpenListTeam/tache
 https://github.com/OpenListTeam/wopan-sdk-go
 https://github.com/OpenListTeam/alist-proxy
 https://github.com/afoim/GithubSiteProxyForCloudflareWorker
+https://github.com/microg/GmsCore
+https://github.com/microg/fdroid-repo
