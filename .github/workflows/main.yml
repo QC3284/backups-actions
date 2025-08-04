@@ -16,6 +16,22 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+        
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
       # 初始化环境
       - name: Setup environment
         run: |
@@ -38,7 +54,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 核心备份流程 - 重构版本
+      # 核心备份流程 - 重构版本（添加分卷压缩）
       - name: Backup repositories
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,7 +68,7 @@ jobs:
             if [[ $space -lt $required ]]; then
               echo "⚠️ 低磁盘空间: ${space}MB < ${required}MB"
               # 尝试上传现有文件释放空间
-              for f in compressed_backups/*.tar.zst; do
+              for f in compressed_backups/*; do
                 [[ -f "$f" ]] && gh release upload $TAG "$f" --clobber && rm -f "$f"
               done
               # 重新检查
@@ -126,14 +142,37 @@ jobs:
                   continue
                 fi
                 
-                # 上传大文件
+                # 文件大小检查（MB）
                 file_size=$(du -m "${WORKSPACE}/$file" | cut -f1)
-                if [[ $file_size -gt 50 ]]; then
-                  echo "⬆️ 上传大文件 (${file_size}MB)..."
-                  if gh release upload $TAG "${WORKSPACE}/$file" --clobber; then
-                    rm -f "${WORKSPACE}/$file"
-                  else
-                    echo "⚠️ 上传失败，保留文件稍后上传"
+                
+                # 分卷压缩逻辑（超过1.8GB时）
+                if [[ $file_size -gt 1800 ]]; then
+                  echo "✂️ 文件过大 (${file_size}MB)，进行分卷处理..."
+                  
+                  # 分卷设置（每个分卷1.8GB）
+                  split -b 1800M -d -a 3 "${WORKSPACE}/$file" "${WORKSPACE}/$file.part"
+                  
+                  # 上传分卷文件
+                  for part_file in "${WORKSPACE}/$file.part"*; do
+                    echo "⬆️ 上传分卷: $(basename "$part_file")"
+                    if gh release upload $TAG "$part_file" --clobber; then
+                      rm -f "$part_file"
+                    else
+                      echo "⚠️ 分卷上传失败，保留文件稍后上传"
+                    fi
+                  done
+                  
+                  # 删除原始大文件
+                  rm -f "${WORKSPACE}/$file"
+                else
+                  # 普通文件上传逻辑
+                  if [[ $file_size -gt 50 ]]; then
+                    echo "⬆️ 上传文件 (${file_size}MB)..."
+                    if gh release upload $TAG "${WORKSPACE}/$file" --clobber; then
+                      rm -f "${WORKSPACE}/$file"
+                    else
+                      echo "⚠️ 上传失败，保留文件稍后上传"
+                    fi
                   fi
                 fi
               else
@@ -148,13 +187,14 @@ jobs:
             fi
           done < back_ck_url.txt
 
-      # 上传剩余文件
+      # 上传剩余文件（适配分卷格式）
       - name: Upload remaining
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.create_release.outputs.tag }}
         run: |
-          for file in compressed_backups/*.tar.zst; do
+          # 处理所有剩余文件（包括分卷）
+          for file in compressed_backups/*; do
             if [[ -f "$file" ]]; then
               echo "⬆️ 上传剩余文件: $(basename "$file")"
               if gh release upload $TAG "$file" --clobber; then
