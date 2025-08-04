@@ -22,7 +22,6 @@ https://github.com/openwrt/rtl8126
 https://github.com/openwrt/uhttpd
 https://github.com/openwrt/rtl8125
 https://github.com/openwrt/odhcp6c
-https://github.com/vernesong/OpenClash
 https://github.com/vernesong/Rules-1
 https://github.com/MetaCubeX/mihomo
 https://github.com/vernesong/mihomo
