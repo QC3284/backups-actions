@@ -15,6 +15,12 @@ jobs:
       # 检出当前仓库
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/
+            back_ck_url.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
 
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
