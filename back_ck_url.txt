@@ -113,7 +113,6 @@ https://github.com/xiaorouji/openwrt-passwall2
 https://github.com/xiaorouji/openwrt-passwall-packages
 https://github.com/istoreos/istoreos
 https://github.com/istoreos/openwrt
-https://github.com/istoreos/.github
 https://github.com/istoreos/istoreos.github.io
 https://github.com/istoreos/istoreos-kvm
 https://github.com/istoreos/istoreos-cloud
