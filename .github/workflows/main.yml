@@ -12,7 +12,7 @@ jobs:
   backup-and-release:
     runs-on: ubuntu-latest
     steps:
-      # 初始化环境 (移除了不必要的检出步骤)
+      # 初始化环境
       - name: Setup environment
         run: |
           sudo apt-get update
@@ -20,13 +20,24 @@ jobs:
           mkdir -p backup_temp compressed_backups
           echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
           : > success.txt; : > failed.txt
-          
-          # 清理可能的缓存和临时文件
-          sudo rm -rf /usr/local/share/boost /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
-          sudo apt-get clean
-          df -h
 
-      # 下载仓库列表文件
+      - name: Free Disk Space (Ubuntu)
+        uses: jlumbroso/free-disk-space@main
+        with:
+          # this might remove tools that are actually needed,
+          # if set to "true" but frees about 6 GB
+          tool-cache: false
+        
+          # all of these default to true, but feel free to set to
+          # "false" if necessary for your workflow
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+     
+     # 下载仓库列表文件
       - name: Download repository list
         run: |
           # 直接从当前仓库下载 back_ck_url.txt 文件
@@ -44,10 +55,16 @@ jobs:
           echo "📋 仓库列表:"
           cat back_ck_url.txt
 
-      # 创建发布
+      # 创建发布 - 修复版本
       - name: Create release
         id: create_release
         run: |
+          # 初始化一个临时 Git 仓库用于 gh 命令
+          git init temp_repo
+          cd temp_repo
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          
           tag="backup-$(date +%Y%m%d%H%M%S)"
           gh release create $tag \
             --title "📦 Backups $(date -u +'%Y-%m-%d %H:%M:%S UTC')" \
@@ -285,6 +302,12 @@ jobs:
           TAG: ${{ steps.create_release.outputs.tag }}
           REPORT: ${{ steps.report.outputs.report }}
         run: |
+          # 初始化一个临时 Git 仓库用于 gh 命令
+          git init temp_repo
+          cd temp_repo
+          git config user.email "action@github.com"
+          git config user.name "GitHub Action"
+          
           body="${REPORT//'%0A'/$'\n'}"
           body="${body//'%25'/'%'}"
           gh release edit $TAG --notes "$body" --draft=false
@@ -301,5 +324,5 @@ jobs:
       # 清理工作区
       - name: Cleanup workspace
         run: |
-          rm -rf backup_temp compressed_backups success.txt failed.txt back_ck_url.txt
+          rm -rf backup_temp compressed_backups success.txt failed.txt back_ck_url.txt temp_repo
           echo "🧹 工作区已清理"
