@@ -12,15 +12,6 @@ jobs:
   backup-and-release:
     runs-on: ubuntu-latest
     steps:
-      # 初始化环境
-      - name: Setup environment
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y zstd pv jq curl
-          mkdir -p backup_temp compressed_backups
-          echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
-          : > success.txt; : > failed.txt
-
       - name: Free Disk Space (Ubuntu)
         uses: jlumbroso/free-disk-space@main
         with:
@@ -36,8 +27,22 @@ jobs:
           large-packages: true
           docker-images: true
           swap-storage: true
-     
-     # 下载仓库列表文件
+      
+      # 初始化环境
+      - name: Setup environment
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y zstd pv jq curl
+          mkdir -p backup_temp compressed_backups
+          echo "WORKSPACE=$(pwd)" >> $GITHUB_ENV
+          : > success.txt; : > failed.txt
+          
+          # 清理可能的缓存和临时文件
+          sudo rm -rf /usr/local/share/boost /usr/share/dotnet /opt/ghc /opt/hostedtoolcache
+          sudo apt-get clean
+          df -h
+
+      # 下载仓库列表文件
       - name: Download repository list
         run: |
           # 直接从当前仓库下载 back_ck_url.txt 文件
