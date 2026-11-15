@@ -109,7 +109,7 @@ archive.org（整仓 git bundle，通常滞后 1-2 年）：
 
 本仓库的 Release（本流水线自己备的）：
 
-    gh release download <tag> -R QC3284/backups-actions -p 'owner-repo-*.tar.zst*'
+    gh release download <tag> -R QC3284/repo-backup -p 'owner-repo-*.tar.zst*'
     cat owner-repo-*.part* > owner-repo.tar.zst     # 分卷时先合并
     sha256sum owner-repo.tar.zst                    # 与 manifest 比对
     zstd -t owner-repo.tar.zst && mkdir repo && tar -xf owner-repo.tar.zst -C repo
