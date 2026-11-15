@@ -1,0 +1,40 @@
+name: Verify Backups
+
+on:
+  schedule:
+    - cron: '0 6 * * 0'
+  workflow_dispatch:
+    inputs:
+      release:
+        description: '要校验的 Release tag（留空 = 最新）'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TZ: UTC
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: scripts/
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Setup
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd
+
+      - name: Verify sampled assets
+        run: bash scripts/verify.sh
+        env:
+          TAG: ${{ inputs.release }}

@@ -1,120 +1,98 @@
-# GitHub Repository Backup and Release
+# GitHub 仓库镜像备份
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
-这是一个使用GitHub Actions自动备份GitHub仓库的项目。它会将指定的仓库列表克隆并压缩后，以GitHub Release的形式存储。
+每天把 `back_ck_url.txt` 里列出的 GitHub 仓库克隆成**裸镜像（mirror）**，用 zstd 压缩后作为 GitHub Release 资产保存。整条链路可校验、可恢复。
 
-## 功能特性
+## 它做什么
 
-- 🕒 **定时自动备份**：每天UTC时间凌晨4点自动运行
-- 🚀 **手动触发备份**：随时通过Workflow Dispatch触发
-- 📦 **高效压缩**：使用Zstandard(ZSTD)算法进行高压缩比备份
-- 🔒 **安全存储**：备份存储在GitHub Releases中
-- 📊 **详细报告**：生成备份成功/失败报告
-- ✂️ **大仓库支持**：自动分卷处理超过1.8GB的仓库
-- 💾 **空间优化**：智能磁盘空间管理
+- **定时**：每天 04:00 UTC 运行（GitHub 调度可能延迟数小时）；也支持手动触发
+- **全量镜像**：`git clone --mirror`，保留全部分支、标签和提交历史；克隆后执行 `git fsck`
+- **压缩**：`tar | zstd -10`，压缩后执行 `zstd -t` 校验；超过 1800MB 自动分卷（GitHub 单资产上限 2GB）
+- **清单**：每个 Release 附带 `manifest-<tag>.tsv`，记录 repo / url / asset / bytes / **sha256** / **源仓库 HEAD commit**
+- **对账**：上传完成后逐项核对 Release 里的资产名和大小
+- **报告**：Release 正文即备份报告（成功/失败/大小/HEAD/失败原因）
+- **恢复演练**：每周日自动抽检 3 个资产，做「下载 → sha256 → 解压 → fsck → HEAD 比对」
+- **保留策略**：7 日 + 4 周 + 6 月（约 17 份），过期 Release 自动清理
 
-## 使用指南
+## 目录结构
 
-### 准备工作
+```
+.github/workflows/main.yml    定时备份 + 发布 + 清理
+.github/workflows/verify.yml  每周恢复演练
+scripts/backup.sh             克隆 / 压缩 / 上传 / 对账
+scripts/report.sh             生成备份报告
+scripts/prune.sh              草稿清理 + GFS 保留策略
+scripts/verify.sh             抽检恢复
+back_ck_url.txt               仓库清单（一行一个 URL）
+```
 
-1. **Fork 此仓库**
-2. **配置仓库 Secrets**
-   - 默认使用`secrets.GITHUB_TOKEN`，无需额外配置（有写入仓库的权限）
-3. **编辑备份列表**
-   - 在仓库根目录创建文件 `back_ck_url.txt`
-   - 每行一个仓库URL（支持HTTPS或SSH格式），例如：
-     ```
-     https://github.com/username/repo1.git
-     git@github.com:username/repo2.git
-     # 注释行以#开头
-     ```
+## 使用
 
-### 运行备份
+### 增删仓库
 
-- **手动运行**：在仓库的Actions标签页中，选择"Repository Backup and Release"工作流，点击"Run workflow"
-- **定时运行**：工作流会在每天UTC时间4点自动运行
+编辑 `back_ck_url.txt`，一行一个 URL，支持 `https://` 和 `git@` 两种写法，`#` 开头为注释：
 
-### 查看备份结果
+```
+https://github.com/openwrt/packages
+git@github.com:torvalds/linux.git
+# 这行会被忽略
+```
 
-1. **访问Releases页面**：
-   - 前往仓库的 **Releases** 页面（通常在仓库首页的右侧菜单）
-   - 查找以 `backup-` 开头并带有时间戳的标签（例如：`backup-20250101000000`）
+重复的仓库会自动跳过（按 owner/repo 去重）。
 
-2. **阅读备份报告**：
-   - 每个发布版本的说明中包含一份 **备份摘要报告**
-   - 报告分为两部分：
-     - **✅ 成功备份**：列出所有成功备份的仓库
-     - **❌ 备份失败**：列出备份过程中失败的仓库及原因（如果有）
+### 手动触发
 
-3. **下载备份文件**：
-   - 在发布版本的 **Assets** 部分，可以下载所有备份的压缩文件
-   - 备份文件命名格式：`{仓库所有者}-{仓库名}-{时间戳}.tar.zst`
-   - **注意**：对于大型仓库，备份文件会被分割为多个分卷文件（每个不超过1.8GB），命名格式为：`{原文件名}.part000`、`{原文件名}.part001` 等
+Actions → **Repository Backup and Release** → Run workflow，可选参数：
 
-4. **处理分卷文件**：
-   - 如果仓库备份被分割成多个分卷文件，你需要下载 **所有** 属于同一个仓库的分卷文件
-   - 使用命令行合并分卷文件：
-     ```bash
-     cat {文件名}.part* > {完整文件名}.tar.zst
-     ```
-     例如：
-     ```bash
-     cat octocat-hello-world-1672531200.tar.zst.part* > octocat-hello-world-1672531200.tar.zst
-     ```
+| 参数 | 说明 |
+|---|---|
+| `repo_filter` | 只备份 URL 中包含该子串的仓库（留空 = 全部） |
+| `limit` | 最多处理前 N 个仓库（0 = 全部） |
 
-### 恢复备份
+### 本地干跑
 
-1. 下载备份文件（如果分卷，需要下载所有分卷）
-2. 合并分卷文件（如果需要）：
-   ```bash
-   cat filename.tar.zst.part* > filename.tar.zst
-   ```
-3. 解压备份文件：
-   ```bash
-   zstd -d filename.tar.zst
-   tar xvf filename.tar
-   ```
-4. 恢复Git仓库：
-   ```bash
-   cd repo.git
-   git init --bare
-   ```
+不需要 token，只克隆和压缩，不上传：
 
-## 技术细节
+```bash
+TAG=local-test DRY_RUN=1 LIMIT=2 bash scripts/backup.sh
+```
 
-### 备份流程
+## 备份产物
 
-1. 创建新的Release草稿
-2. 逐个克隆仓库
-3. 使用ZSTD压缩仓库内容
-4. 大文件自动分卷处理（>1.8GB）
-5. 上传备份文件到Release
-6. 生成备份报告并发布Release
+- 命名：`{owner}-{repo}-{unix时间戳}.tar.zst`
+- 分卷：`{同名}.part000`、`.part001` …（每个 1800MB）
+- 清单：`manifest-backup-YYYYmmddHHMMSS.tsv`
 
-### 分卷处理
+恢复前先用清单里的 sha256 校验，再解压。
 
-当备份文件超过1.8GB时，系统会自动分割文件为多个分卷：
-- 分卷大小：1.8GB（1800MB）
-- 命名格式：`原文件名.part000`, `原文件名.part001`等
-- 合并命令：`cat filename.part* > fullfile.zst`
+## 保留策略
+
+`scripts/prune.sh --gfs` 按「最近 7 天各一份 + 最近 4 个自然周各一份 + 最近 6 个自然月各一份」保留，其余删除；24 小时内创建的 Release 一律不动，最新一份永远保留。时间以 **tag 名里的 UTC 时间戳** 为准（该仓库的 Release `created_at` 字段不可靠）。
+
+失败的运行会留下草稿，`--drafts` 会在每次运行开始时清掉 3 天前的草稿。
+
+## 校验与恢复
+
+```bash
+# 1. 下载（分卷要全部下载）
+gh release download <tag> -p 'openwrt-packages-*.tar.zst*'
+
+# 2. 合并分卷（如有）
+cat openwrt-packages-*.part* > openwrt-packages.tar.zst
+
+# 3. 校验（sha256 见 manifest）
+sha256sum openwrt-packages.tar.zst
+
+# 4. 解压 + 校验 + 克隆工作副本
+mkdir -p restore
+zstd -dc openwrt-packages.tar.zst | tar xf - -C restore
+git --git-dir=restore fsck --no-progress
+git clone restore openwrt-packages
+```
+
+完整的恢复流程（含推送到新仓库、强制覆盖原仓库）见 [恢复教程.md](恢复教程.md)。
 
 ## 许可协议
 
-本项目采用 **GNU General Public License v3.0** 授权。
-完整的许可协议请查看 [LICENSE](LICENSE) 文件。
-
-## 贡献指南
-
-欢迎通过Issue或Pull Request贡献代码！请确保：
-- 遵循现有代码风格
-- 包含必要的测试
-- 更新相关文档
-
----
-
-**温馨提示**：
-- 备份完成后，您会收到GitHub的通知邮件（可在账户设置中配置）
-- 定期检查备份文件完整性，建议每季度进行一次恢复测试
-- 大型仓库（>1GB）可能需要较长时间处理，请耐心等待
-- 尽量定期清理“发行版”，本项目的备份方式可能产生大量重复数据
+GNU General Public License v3.0，见 [LICENSE](LICENSE)。

@@ -1,0 +1,9 @@
+# 运行时产物
+backup_temp/
+compressed_backups/
+verify_tmp/
+manifest.tsv
+failed.tsv
+report.md
+*.log
+upload.err
