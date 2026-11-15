@@ -21,13 +21,63 @@ concurrency:
   group: repository-backup
   cancel-in-progress: false
 
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TZ: UTC
+  SHARD_TOTAL: '6'
+
 jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.create_release.outputs.tag }}
+      start_epoch: ${{ steps.meta.outputs.start_epoch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/
+            scripts/
+            back_ck_url.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Meta
+        id: meta
+        run: echo "start_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Prune stale drafts
+        run: bash scripts/prune.sh --drafts
+        env:
+          DRAFT_KEEP_DAYS: '3'
+
+      - name: Create draft release
+        id: create_release
+        run: |
+          set -euo pipefail
+          tag="backup-$(date -u +%Y%m%d%H%M%S)"
+          gh release create "$tag" \
+            --title "📦 Backups $(date -u +'%Y-%m-%d %H:%M UTC')" \
+            --notes "🚧 备份进行中…" \
+            --draft
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
   backup:
+    name: Backup (shard ${{ matrix.shard }}/6)
+    needs: prepare
     runs-on: ubuntu-latest
     timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5]
     env:
-      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      TZ: UTC
+      TAG: ${{ needs.prepare.outputs.tag }}
+      SHARD_INDEX: ${{ matrix.shard }}
+      MANIFEST_FILE: manifest-shard-${{ matrix.shard }}.tsv
+      FAILED_FILE: failed-shard-${{ matrix.shard }}.tsv
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -60,40 +110,68 @@ jobs:
             echo "START_EPOCH=$(date -u +%s)"
           } >> "$GITHUB_ENV"
 
-      - name: Prune stale drafts
-        run: bash scripts/prune.sh --drafts
-        env:
-          DRAFT_KEEP_DAYS: '3'
-
-      - name: Create draft release
-        id: create_release
-        run: |
-          set -euo pipefail
-          tag="backup-$(date -u +%Y%m%d%H%M%S)"
-          gh release create "$tag" \
-            --title "📦 Backups $(date -u +'%Y-%m-%d %H:%M UTC')" \
-            --notes "🚧 备份进行中…" \
-            --draft
-          echo "tag=$tag" >> "$GITHUB_OUTPUT"
-
       - name: Backup repositories
         run: bash scripts/backup.sh
         env:
-          TAG: ${{ steps.create_release.outputs.tag }}
           LIMIT: ${{ inputs.limit }}
           REPO_FILTER: ${{ inputs.repo_filter }}
+
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shard-${{ matrix.shard }}
+          path: |
+            manifest-shard-${{ matrix.shard }}.tsv
+            failed-shard-${{ matrix.shard }}.tsv
+          if-no-files-found: ignore
+          retention-days: 7
+
+  finalize:
+    name: Finalize
+    needs: [prepare, backup]
+    if: always() && needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-latest
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      START_EPOCH: ${{ needs.prepare.outputs.start_epoch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/
+            scripts/
+            back_ck_url.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Download shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: shard-*
+          merge-multiple: true
+
+      - name: Merge shard manifests
+        run: |
+          set -euo pipefail
+          printf 'repo\turl\tasset\tbytes\tsha256\tcommit\tbacked_up_at\n' > manifest.tsv
+          if compgen -G 'manifest-shard-*.tsv' > /dev/null; then
+            tail -qn +2 manifest-shard-*.tsv >> manifest.tsv || true
+          fi
+          : > failed.tsv
+          cat failed-shard-*.tsv >> failed.tsv 2>/dev/null || true
+          printf 'merged: %s assets, %s failed\n' "$(( $(wc -l < manifest.tsv) - 1 ))" "$(wc -l < failed.tsv)"
 
       - name: Build report
         if: always()
         run: bash scripts/report.sh
-        env:
-          TAG: ${{ steps.create_release.outputs.tag }}
 
       - name: Publish release
-        if: always() && steps.create_release.outputs.tag != ''
+        if: always()
         run: |
           set -euo pipefail
-          tag="${{ steps.create_release.outputs.tag }}"
+          tag="$TAG"
           if [[ -s manifest.tsv ]]; then
             cp manifest.tsv "manifest-$tag.tsv"
             gh release upload "$tag" "manifest-$tag.tsv" --clobber
@@ -105,10 +183,10 @@ jobs:
           fi
 
       - name: Apply retention
-        if: always() && steps.create_release.outputs.tag != ''
+        if: always()
         run: bash scripts/prune.sh --gfs
         env:
-          SKIP_TAG: ${{ steps.create_release.outputs.tag }}
+          SKIP_TAG: ${{ needs.prepare.outputs.tag }}
           KEEP_DAILY: '7'
           KEEP_WEEKLY: '4'
           KEEP_MONTHLY: '6'
@@ -122,5 +200,3 @@ jobs:
           elif [[ -f report.md ]]; then
             cat report.md >> "$GITHUB_STEP_SUMMARY"
           fi
-        env:
-          TAG: ${{ steps.create_release.outputs.tag }}

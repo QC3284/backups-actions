@@ -9,6 +9,7 @@
 ## 它做什么
 
 - **定时**：每天 04:00 UTC 运行（GitHub 调度可能延迟数小时）；也支持手动触发
+- **并行**：prepare 建 Release → 6 个 matrix 分片同时备份（各自独立 runner/磁盘）→ finalize 合并清单、出报告、发布、清理
 - **全量镜像**：git clone --mirror，保留全部分支、标签和提交历史；克隆后执行 git fsck
 - **预检**：先用 gh api 探测仓库状态，404（已删/改名）与 451（DMCA/TOS 封禁）直接记为失败，不做无谓重试
 - **压缩**：tar | zstd -10，压缩后执行 zstd -t 校验；超过 1800MB 自动分卷（GitHub 单资产上限 2GB）

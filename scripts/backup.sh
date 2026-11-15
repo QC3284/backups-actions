@@ -11,10 +11,14 @@
 #   MAX_PART_MB    单文件上限，超过则分卷（默认 1800）
 #   CLONE_TIMEOUT  单次克隆超时秒数（默认 900）
 #   MIN_FREE_MB    磁盘低水位（默认 2000）
+#   SHARD_INDEX    当前分片编号（默认 0）
+#   SHARD_TOTAL    分片总数（默认 1 = 不分片；>1 时按清单顺序取模分组，用于 matrix 并行）
+#   MANIFEST_FILE  清单输出路径（默认 $WORKSPACE/manifest.tsv）
+#   FAILED_FILE    失败清单输出路径（默认 $WORKSPACE/failed.tsv）
 #
 # 输出：
-#   $WORKSPACE/manifest.tsv   每个资产：repo url asset bytes sha256 commit backed_up_at
-#   $WORKSPACE/failed.tsv     失败仓库：repo reason
+#   manifest.tsv   每个资产：repo url asset bytes sha256 commit backed_up_at
+#   failed.tsv     失败仓库：repo reason
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -28,15 +32,20 @@ MAX_PART_MB=${MAX_PART_MB:-1800}
 CLONE_TIMEOUT=${CLONE_TIMEOUT:-900}
 FSCK_TIMEOUT=${FSCK_TIMEOUT:-900}
 MIN_FREE_MB=${MIN_FREE_MB:-2000}
+SHARD_INDEX=${SHARD_INDEX:-0}
+SHARD_TOTAL=${SHARD_TOTAL:-1}
+MANIFEST=${MANIFEST_FILE:-$WORKSPACE/manifest.tsv}
+FAILED=${FAILED_FILE:-$WORKSPACE/failed.tsv}
 
 TMP_DIR="$WORKSPACE/backup_temp"
 OUT_DIR="$WORKSPACE/compressed_backups"
-MANIFEST="$WORKSPACE/manifest.tsv"
-FAILED="$WORKSPACE/failed.tsv"
 
 [[ -n $TAG ]] || { echo "TAG 未设置" >&2; exit 2; }
 [[ -f $LIST_FILE ]] || { echo "清单不存在: $LIST_FILE" >&2; exit 2; }
 [[ $LIMIT =~ ^[0-9]+$ ]] || LIMIT=0
+[[ $SHARD_TOTAL =~ ^[1-9][0-9]*$ ]] || SHARD_TOTAL=1
+[[ $SHARD_INDEX =~ ^[0-9]+$ ]] || SHARD_INDEX=0
+(( SHARD_INDEX < SHARD_TOTAL )) || SHARD_INDEX=0
 if [[ $DRY_RUN == 0 ]]; then
   command -v gh >/dev/null || { echo "gh 未安装" >&2; exit 2; }
 fi
@@ -198,7 +207,23 @@ while IFS= read -r url; do
   fi
 done < "$LIST_FILE"
 
+# 分片：按清单顺序取模，只处理属于本片的部分（matrix 并行用）
+if (( SHARD_TOTAL > 1 && ${#items[@]} > 0 )); then
+  sharded=()
+  for i in "${!items[@]}"; do
+    if (( i % SHARD_TOTAL == SHARD_INDEX )); then
+      sharded+=("${items[$i]}")
+    fi
+  done
+  items=("${sharded[@]}")
+  log "🧩 分片 ${SHARD_INDEX}/${SHARD_TOTAL}：本片 ${#items[@]} 个仓库"
+fi
+
 if (( ${#items[@]} == 0 )); then
+  if (( SHARD_TOTAL > 1 )); then
+    log "本分片没有需要处理的仓库（filter=$REPO_FILTER limit=$LIMIT）"
+    exit 0
+  fi
   log "❌ 没有匹配到任何仓库（filter=$REPO_FILTER limit=$LIMIT）"
   exit 2
 fi
