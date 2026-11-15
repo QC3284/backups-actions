@@ -80,8 +80,9 @@ scripts/prune.sh --gfs 按「最近 7 天各一份 + 最近 4 个自然周各一
 
 ## 已知限制 / 后续工作
 
-- 单仓超过约 2GB 会拖慢整轮（vernesong/OpenClash 47.8GB，暂不纳入，需要本地镜像或 shallow 方案）；
-- 每日全量 mirror：大仓库（blackmatrix7 4.4GB 等）后续可拆成每周一次；
+- 实测一轮 84 仓约 27 GB、18 分钟（6 分片并行）；单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
+- 巨型但内容可再生的仓库走 `#shallow` 浅克隆（只存默认分支快照，资产名带 `-shallow`）：blackmatrix7/ios_rule_script（全量 17.7GB → 浅克隆 74MB）、Guovin/iptv-api（20.3GB → 28MB）；
+- vernesong/OpenClash（47.8GB）暂不纳入，可照 `#shallow` 方式单独处理；
 - 非 GitHub 镜像（gitee / gitcode / Software Heritage）暂不进入流水线，手册见 docs/backup-targets.md；
 - GitHub fork 网络可能被整片封禁（ReVanced 702 仓先例），重要数据应定期导出到本地 / 对象存储。
 
