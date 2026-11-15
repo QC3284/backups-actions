@@ -47,7 +47,7 @@ https://github.com/mack-a/v2ray-agent
 https://github.com/233boy/v2ray
 
 # ---------- 规则 / 域名库 / IP 库 ----------
-https://github.com/blackmatrix7/ios_rule_script
+https://github.com/blackmatrix7/ios_rule_script   #shallow
 https://github.com/ACL4SSR/ACL4SSR
 https://github.com/Loyalsoldier/clash-rules
 https://github.com/v2fly/domain-list-community
@@ -99,8 +99,8 @@ https://github.com/bggRGjQaUbCoE/PiliPlus
 https://github.com/FongMi/TV
 https://github.com/j4Uq/TVBoxOSC
 https://github.com/fanmingming/live
-# Guovin/iptv-api 已排除：实测 mirror 体积约 20GB（API 报告 1.3GB 严重低估），每日备份不可行
-# https://github.com/Guovin/iptv-api
+# Guovin/iptv-api 全量 mirror 约 20GB（API 报告 1.3GB 低估），改为浅克隆（约 28MB）
+https://github.com/Guovin/iptv-api   #shallow
 https://github.com/gedoor/legado
 https://github.com/hectorqin/reader
 

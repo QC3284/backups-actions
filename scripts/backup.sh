@@ -130,11 +130,13 @@ ensure_space() {
 }
 
 clone_repo() {
-  local url=$1 dir=$2 to=$3 attempt t0 elapsed
+  local url=$1 dir=$2 to=$3 shallow=${4:-0} attempt t0 elapsed args=()
+  args=(--mirror --quiet)
+  (( shallow )) && args+=(--depth 1)
   for attempt in 1 2 3; do
     rm -rf "$dir"
     t0=$(date -u +%s)
-    if timeout "$to" git clone --mirror --quiet "$url" "$dir" >clone.log 2>&1; then
+    if timeout "$to" git clone "${args[@]}" "$url" "$dir" >clone.log 2>&1; then
       elapsed=$(( $(date -u +%s) - t0 ))
       log "   ⏱️ 克隆耗时 ${elapsed}s（超时上限 ${to}s，第 $attempt 次）"
       return 0
@@ -202,8 +204,10 @@ parse_github_url() {
 # ---------- 构建待备份清单（去重 + 过滤） ----------
 items=()
 declare -A seen=()
-while IFS= read -r url; do
-  url=${url%%#*}
+while IFS= read -r line; do
+  shallow=0
+  [[ $line == *'#shallow'* ]] && shallow=1
+  url=${line%%#*}
   url=${url//[[:space:]]/}
   [[ -z $url ]] && continue
   if [[ -n $REPO_FILTER && $url != *"$REPO_FILTER"* ]]; then
@@ -222,7 +226,7 @@ while IFS= read -r url; do
     continue
   fi
   seen[$key]=1
-  items+=("$owner"$'\t'"$repo"$'\t'"$url")
+  items+=("$owner"$'\t'"$repo"$'\t'"$url"$'\t'"$shallow")
   if (( LIMIT > 0 && ${#items[@]} >= LIMIT )); then
     break
   fi
@@ -270,11 +274,13 @@ log "=============================================="
 
 idx=0
 for item in "${items[@]}"; do
-  IFS=$'\t' read -r owner repo url <<< "$item"
+  IFS=$'\t' read -r owner repo url shallow <<< "$item"
+  shallow=${shallow:-0}
   name="$owner/$repo"
   idx=$((idx + 1))
   log ""
   log "📦 [$idx/${#items[@]}] $name"
+  (( shallow )) && log "   🪶 浅克隆（仅默认分支 tip，不含历史）"
 
   if ! ensure_space "$MIN_FREE_MB"; then
     record_fail "$name" "磁盘空间不足（<$MIN_FREE_MB MB）"
@@ -312,7 +318,7 @@ for item in "${items[@]}"; do
   log "   ⚖️ 预估 $((api_kb / 1024))MB → 克隆超时 ${clone_to}s / fsck 超时 ${fsck_to}s"
 
   dir="$TMP_DIR/$owner-$repo"
-  if ! clone_repo "$url" "$dir" "$clone_to"; then
+  if ! clone_repo "$url" "$dir" "$clone_to" "$shallow"; then
     record_fail "$name" "克隆失败（重试 3 次）"
     rm -rf "$dir"
     continue
@@ -344,6 +350,7 @@ for item in "${items[@]}"; do
   fi
 
   base="$owner-$repo-$(date -u +%s)"
+  (( shallow )) && base="$base-shallow"
   archive="$OUT_DIR/$base.tar.zst"
   if ! compress_repo "$dir" "$archive" "$size_mb"; then
     record_fail "$name" "压缩失败"
