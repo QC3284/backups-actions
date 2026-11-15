@@ -117,10 +117,10 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          if [[ -f report.md ]]; then
+          if bash scripts/summary.sh && [[ -s summary.md ]]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -f report.md ]]; then
             cat report.md >> "$GITHUB_STEP_SUMMARY"
           fi
-          tag="${{ steps.create_release.outputs.tag }}"
-          if [[ -n $tag ]]; then
-            printf '\n🔗 https://github.com/%s/releases/tag/%s\n' "$GITHUB_REPOSITORY" "$tag" >> "$GITHUB_STEP_SUMMARY"
-          fi
+        env:
+          TAG: ${{ steps.create_release.outputs.tag }}
