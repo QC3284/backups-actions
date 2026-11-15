@@ -21,8 +21,10 @@
 
 ## 2. 当前清单
 
-- 84 个 GitHub 仓库，全量 mirror 约 **17.9 GB / 次**（不含 OpenClash）；
+- 83 个 GitHub 仓库，全量 mirror 约 **18.6 GB / 次**（不含 OpenClash、Guovin/iptv-api）；
 - 每日 04:00 UTC 跑一次；保留策略 7 日 + 4 周 + 6 月；
+- 分片按**体积做 LPT 均衡**（scripts/shardmap.sh 预取 GitHub API size，prepare 上传 shardmap 工件），避免某个分片独自卡大仓库；
+- 单仓实际 mirror 超过 8000MB 会跳过并记失败，防止 20GB 级仓库拖垮整片；
 - 每个仓库做完 git fsck、zstd -t、sha256，产物命名 owner-repo-<epoch>.tar.zst，超过 1.8GB 自动分卷；
 - manifest 记录 sha256 与源仓库 commit，report.md 写入 Release notes。
 
@@ -131,6 +133,7 @@ GitHub 上的 release 资产（SWH 救不了二进制）：
 | 仓库 | 原因 |
 |---|---|
 | vernesong/OpenClash | 单仓 **47.8 GB**，一次 mirror + 压缩需要约 90GB 磁盘，超出 runner 上限；需要单独的本地镜像或 shallow 方案 |
+| Guovin/iptv-api | API 报告 1.3GB，但实测 `git clone --mirror` 约 **20.3GB**、压缩后 19.5GB（内容为每日生成的 IPTV 播放列表，可再生成）；每日备份会占掉整个分片的磁盘与上传时间 |
 | AlistGo/alist | 2025-06 已被出售给第三方，上游代码可信度存疑；社区继任 OpenListTeam/OpenList 已在清单 |
 | v2board/v2board | 2023 年后停更、作者失联，商业机场计费面板，法律风险最高 |
 | 各类节点/订阅分发仓 | 纯内容分发，无代码价值，法律风险最高 |

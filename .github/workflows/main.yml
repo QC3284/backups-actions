@@ -30,6 +30,7 @@ jobs:
   prepare:
     name: Prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     outputs:
       tag: ${{ steps.create_release.outputs.tag }}
       start_epoch: ${{ steps.meta.outputs.start_epoch }}
@@ -52,6 +53,16 @@ jobs:
         run: bash scripts/prune.sh --drafts
         env:
           DRAFT_KEEP_DAYS: '3'
+
+      - name: Build size-balanced shard map
+        run: SHARD_TOTAL="$SHARD_TOTAL" bash scripts/shardmap.sh back_ck_url.txt
+
+      - name: Upload shard map
+        uses: actions/upload-artifact@v4
+        with:
+          name: shardmap
+          path: shardmap.tsv
+          retention-days: 7
 
       - name: Create draft release
         id: create_release
@@ -76,6 +87,7 @@ jobs:
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       SHARD_INDEX: ${{ matrix.shard }}
+      SHARD_MAP: shardmap.tsv
       MANIFEST_FILE: manifest-shard-${{ matrix.shard }}.tsv
       FAILED_FILE: failed-shard-${{ matrix.shard }}.tsv
     steps:
@@ -88,6 +100,11 @@ jobs:
             back_ck_url.txt
           sparse-checkout-cone-mode: false
           fetch-depth: 1
+
+      - name: Download shard map
+        uses: actions/download-artifact@v4
+        with:
+          name: shardmap
 
       - name: Free disk space
         uses: jlumbroso/free-disk-space@v1.3.2
@@ -132,6 +149,7 @@ jobs:
     needs: [prepare, backup]
     if: always() && needs.prepare.outputs.tag != ''
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       START_EPOCH: ${{ needs.prepare.outputs.start_epoch }}

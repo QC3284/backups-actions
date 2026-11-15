@@ -30,7 +30,12 @@ LIMIT=${LIMIT:-0}
 REPO_FILTER=${REPO_FILTER:-}
 MAX_PART_MB=${MAX_PART_MB:-1800}
 CLONE_TIMEOUT=${CLONE_TIMEOUT:-900}
+CLONE_MAX_TIMEOUT=${CLONE_MAX_TIMEOUT:-3600}
+CLONE_SEC_PER_MB=${CLONE_SEC_PER_MB:-2}
+MAX_CLONE_MB=${MAX_CLONE_MB:-8000}
 FSCK_TIMEOUT=${FSCK_TIMEOUT:-900}
+FSCK_MAX_TIMEOUT=${FSCK_MAX_TIMEOUT:-1800}
+SHARD_MAP=${SHARD_MAP:-$WORKSPACE/shardmap.tsv}
 MIN_FREE_MB=${MIN_FREE_MB:-2000}
 SHARD_INDEX=${SHARD_INDEX:-0}
 SHARD_TOTAL=${SHARD_TOTAL:-1}
@@ -125,21 +130,37 @@ ensure_space() {
 }
 
 clone_repo() {
-  local url=$1 dir=$2 attempt
+  local url=$1 dir=$2 to=$3 attempt t0 elapsed
   for attempt in 1 2 3; do
     rm -rf "$dir"
-    if timeout "$CLONE_TIMEOUT" git clone --mirror --quiet "$url" "$dir" >clone.log 2>&1; then
+    t0=$(date -u +%s)
+    if timeout "$to" git clone --mirror --quiet "$url" "$dir" >clone.log 2>&1; then
+      elapsed=$(( $(date -u +%s) - t0 ))
+      log "   ⏱️ 克隆耗时 ${elapsed}s（超时上限 ${to}s，第 $attempt 次）"
       return 0
     fi
-    log "   ⚠️ 克隆失败（第 $attempt/3 次）：$(tail -n 1 clone.log)"
+    elapsed=$(( $(date -u +%s) - t0 ))
+    log "   ⚠️ 克隆失败（第 $attempt/3 次，耗时 ${elapsed}s，上限 ${to}s）：$(tail -n 1 clone.log)"
     sleep $((attempt * 10))
   done
   return 1
 }
 
 verify_mirror() {
-  local dir=$1
-  timeout "$FSCK_TIMEOUT" git -C "$dir" fsck --no-progress --no-dangling >fsck.log 2>&1
+  local dir=$1 to=$2 t0 elapsed rc=0
+  t0=$(date -u +%s)
+  timeout "$to" git -C "$dir" fsck --no-progress --no-dangling >fsck.log 2>&1 || rc=$?
+  elapsed=$(( $(date -u +%s) - t0 ))
+  if (( rc == 0 )); then
+    log "   🔎 fsck 通过（${elapsed}s）"
+    return 0
+  fi
+  if (( rc == 124 )); then
+    log "   ⚠️ fsck 超时（耗时 ${elapsed}s，上限 ${to}s）"
+  else
+    log "   ⚠️ fsck 失败（rc=$rc）：$(tail -n 1 fsck.log)"
+  fi
+  return 1
 }
 
 # 预检仓库状态：404=已删/改名，451=DMCA/TOS 封禁。
@@ -207,16 +228,31 @@ while IFS= read -r url; do
   fi
 done < "$LIST_FILE"
 
-# 分片：按清单顺序取模，只处理属于本片的部分（matrix 并行用）
+# 分片：优先用 shardmap.tsv（按体积做 LPT 均衡），没有则回退按清单顺序取模
 if (( SHARD_TOTAL > 1 && ${#items[@]} > 0 )); then
   sharded=()
-  for i in "${!items[@]}"; do
-    if (( i % SHARD_TOTAL == SHARD_INDEX )); then
-      sharded+=("${items[$i]}")
-    fi
-  done
+  if [[ -f $SHARD_MAP ]]; then
+    declare -A mine=()
+    while IFS=$'\t' read -r m_owner m_repo m_shard; do
+      [[ -z ${m_shard:-} ]] && continue
+      (( m_shard == SHARD_INDEX )) || continue
+      mine["$(printf '%s/%s' "$m_owner" "$m_repo" | tr '[:upper:]' '[:lower:]')"]=1
+    done < "$SHARD_MAP"
+    for item in "${items[@]}"; do
+      IFS=$'\t' read -r o r _u <<< "$item"
+      key="$(printf '%s/%s' "$o" "$r" | tr '[:upper:]' '[:lower:]')"
+      if [[ -n ${mine[$key]:-} ]]; then
+        sharded+=("$item")
+      fi
+    done
+    log "🧩 分片 ${SHARD_INDEX}/${SHARD_TOTAL}（shardmap 均衡）：本片 ${#sharded[@]} 个仓库"
+  else
+    for i in "${!items[@]}"; do
+      (( i % SHARD_TOTAL == SHARD_INDEX )) && sharded+=("${items[$i]}")
+    done
+    log "🧩 分片 ${SHARD_INDEX}/${SHARD_TOTAL}（顺序取模）：本片 ${#sharded[@]} 个仓库"
+  fi
   items=("${sharded[@]}")
-  log "🧩 分片 ${SHARD_INDEX}/${SHARD_TOTAL}：本片 ${#items[@]} 个仓库"
 fi
 
 if (( ${#items[@]} == 0 )); then
@@ -246,8 +282,9 @@ for item in "${items[@]}"; do
   fi
 
   probe=$(probe_repo "$owner" "$repo" || true)
-  case $probe in
-    ok*) ;;
+  p_status=${probe%%$'\t'*}
+  case $p_status in
+    ok) ;;
     blocked)
       log "   🚫 平台封禁（HTTP 451，DMCA/TOS）"
       record_fail "$name" "平台封禁（HTTP 451）"
@@ -260,14 +297,28 @@ for item in "${items[@]}"; do
       ;;
   esac
 
+  # 按预估体积放宽克隆/fsck 超时：大仓库在慢链路上 900s 明显不够
+  api_kb=0
+  if [[ $p_status == ok ]]; then
+    IFS=$'\t' read -r _ api_kb _arch _dis <<< "$probe"
+  fi
+  [[ $api_kb =~ ^[0-9]+$ ]] || api_kb=0
+  clone_to=$(( api_kb / 1024 * CLONE_SEC_PER_MB ))
+  (( clone_to < CLONE_TIMEOUT )) && clone_to=$CLONE_TIMEOUT
+  (( clone_to > CLONE_MAX_TIMEOUT )) && clone_to=$CLONE_MAX_TIMEOUT
+  fsck_to=$(( api_kb / 1024 ))
+  (( fsck_to < FSCK_TIMEOUT )) && fsck_to=$FSCK_TIMEOUT
+  (( fsck_to > FSCK_MAX_TIMEOUT )) && fsck_to=$FSCK_MAX_TIMEOUT
+  log "   ⚖️ 预估 $((api_kb / 1024))MB → 克隆超时 ${clone_to}s / fsck 超时 ${fsck_to}s"
+
   dir="$TMP_DIR/$owner-$repo"
-  if ! clone_repo "$url" "$dir"; then
+  if ! clone_repo "$url" "$dir" "$clone_to"; then
     record_fail "$name" "克隆失败（重试 3 次）"
     rm -rf "$dir"
     continue
   fi
 
-  if ! verify_mirror "$dir"; then
+  if ! verify_mirror "$dir" "$fsck_to"; then
     record_fail "$name" "git fsck 失败"
     rm -rf "$dir"
     continue
@@ -277,6 +328,14 @@ for item in "${items[@]}"; do
   refs=$(git -C "$dir" for-each-ref | wc -l | tr -d ' ')
   size_mb=$(du -sm "$dir" | cut -f1)
   log "   ✅ 克隆完成：${size_mb}MB / refs=${refs} / HEAD=${commit:0:12}"
+
+  # 防护：个别仓库实际 mirror 体积远超 API 预估（例如 20GB），压缩+上传会拖垮整片
+  if (( size_mb > MAX_CLONE_MB )); then
+    log "   ✋ 实际体积 ${size_mb}MB 超过单仓上限 ${MAX_CLONE_MB}MB，跳过"
+    record_fail "$name" "mirror 体积 ${size_mb}MB 超过上限 ${MAX_CLONE_MB}MB"
+    rm -rf "$dir"
+    continue
+  fi
 
   if ! ensure_space $((size_mb + 500)); then
     record_fail "$name" "压缩所需磁盘空间不足"
