@@ -133,6 +133,22 @@ verify_mirror() {
   timeout "$FSCK_TIMEOUT" git -C "$dir" fsck --no-progress --no-dangling >fsck.log 2>&1
 }
 
+# 预检仓库状态：404=已删/改名，451=DMCA/TOS 封禁。
+# 避免对死仓库白跑 3 次克隆重试。
+probe_repo() {
+  local owner=$1 repo=$2 out
+  if out=$(gh api "repos/$owner/$repo" --jq '[.size, (.archived|tostring), (.disabled|tostring)] | @tsv' 2>probe.err); then
+    printf 'ok\t%s' "$out"
+    return 0
+  fi
+  if grep -qi 'blocked' probe.err; then
+    printf 'blocked'
+  else
+    printf 'missing'
+  fi
+  return 1
+}
+
 compress_repo() {
   local dir=$1 out=$2 size_mb=$3
   ( cd "$dir" && tar -cf - . | pv -f -s $((size_mb * 1024 * 1024)) | zstd -q -10 -T0 > "$out" )
@@ -203,6 +219,21 @@ for item in "${items[@]}"; do
     record_fail "$name" "磁盘空间不足（<$MIN_FREE_MB MB）"
     continue
   fi
+
+  probe=$(probe_repo "$owner" "$repo" || true)
+  case $probe in
+    ok*) ;;
+    blocked)
+      log "   🚫 平台封禁（HTTP 451，DMCA/TOS）"
+      record_fail "$name" "平台封禁（HTTP 451）"
+      continue
+      ;;
+    *)
+      log "   ❓ 仓库不存在（HTTP 404，可能已删/改名）"
+      record_fail "$name" "仓库不存在或已改名（HTTP 404）"
+      continue
+      ;;
+  esac
 
   dir="$TMP_DIR/$owner-$repo"
   if ! clone_repo "$url" "$dir"; then
@@ -299,10 +330,19 @@ verify_failed=0
 if [[ $DRY_RUN == 0 && -n ${GITHUB_REPOSITORY:-} ]]; then
   log ""
   log "🔍 核对 Release 资产…"
-  gh api "repos/$GITHUB_REPOSITORY/releases/tags/$TAG" \
-    --jq '.assets[] | [.name, (.size|tostring)] | @tsv' 2>/dev/null | sort > "$WORKSPACE/.remote_assets.tsv"
+  # 草稿态的 Release 不会出现在 /releases/tags/{tag}（404），只能从列表里筛；
+  # 列表本身失败时只告警，不把整次备份判失败。
+  gh api "repos/$GITHUB_REPOSITORY/releases?per_page=100" --paginate \
+    --jq ".[] | select(.tag_name == \"$TAG\") | .assets[] | [.name, (.size|tostring)] | @tsv" \
+    > "$WORKSPACE/.remote_assets.tsv" 2>reconcile.err || true
+  sort -o "$WORKSPACE/.remote_assets.tsv" "$WORKSPACE/.remote_assets.tsv" 2>/dev/null || true
   awk -F'\t' 'NR>1 {print $3 "\t" $4}' "$MANIFEST" | sort > "$WORKSPACE/.want_assets.tsv"
-  missing=$(comm -23 "$WORKSPACE/.want_assets.tsv" "$WORKSPACE/.remote_assets.tsv" || true)
+  missing=""
+  if [[ -s $WORKSPACE/.remote_assets.tsv ]]; then
+    missing=$(comm -23 "$WORKSPACE/.want_assets.tsv" "$WORKSPACE/.remote_assets.tsv" || true)
+  else
+    log "   ⚠️ 读不到 Release 资产列表，跳过核对：$(head -n 1 reconcile.err 2>/dev/null || true)"
+  fi
   if [[ -n $missing ]]; then
     printf '::error::以下资产未出现在 Release 中（或大小不符）：\n%s\n' "$missing"
     verify_failed=1

@@ -7,3 +7,5 @@ failed.tsv
 report.md
 *.log
 upload.err
+probe.err
+reconcile.err
