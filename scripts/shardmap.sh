@@ -34,15 +34,8 @@ while IFS= read -r line; do
   fi
 done < "$LIST_FILE" | awk -F'\t' '!seen[tolower($1"/"$2)]++' > "$tmp/repos.tsv"
 
-# 2. 逐个查询体积（串行，84 个仓库约 1 分钟；浅克隆仓库按 0 计）
-while IFS=$'\t' read -r owner repo shallow; do
-  if [[ $shallow == 1 ]]; then
-    size=0
-  else
-    size=$(gh api "repos/$owner/$repo" --jq .size 2>/dev/null || echo 0)
-  fi
-  printf '%s\t%s\t%s\n' "$owner" "$repo" "$size"
-done < "$tmp/repos.tsv" > "$tmp/sizes.tsv"
+# 2. 并发查询体积（浅克隆仓库按 0 计），scripts/size-one.sh 处理单行
+xargs -d '\n' -P 8 -n 1 bash scripts/size-one.sh < "$tmp/repos.tsv" > "$tmp/sizes.tsv"
 
 # 3. LPT 贪心分配：体积大的先放，放到当前累计最小的分片
 awk -F'\t' '{ size = ($3 == "" ? 0 : $3); print size "\t" $1 "\t" $2 }' "$tmp/sizes.tsv" |
