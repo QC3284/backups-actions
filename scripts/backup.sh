@@ -152,6 +152,15 @@ clone_repo() {
   return 1
 }
 
+# 历史遗留的畸形 submodule URL（如 Magisk 的 https://github.com:topjohnwu/resetprop.git）
+# 会让 git fsck 以 rc=1 报 "gitmodulesUrl: disallowed submodule url"，但对象完整性没问题。
+# 只有当日志里除这类错误外没有别的内容时才放行。
+fsck_benign_only() {
+  local log=$1
+  [[ -s $log ]] || return 1
+  ! grep -qvE '^[[:space:]]*$|gitmodulesUrl: disallowed submodule url' "$log"
+}
+
 verify_mirror() {
   local dir=$1 to=$2 t0 elapsed rc=0
   t0=$(date -u +%s)
@@ -163,6 +172,9 @@ verify_mirror() {
   fi
   if (( rc == 124 )); then
     log "   ⚠️ fsck 超时（耗时 ${elapsed}s，上限 ${to}s）"
+  elif fsck_benign_only fsck.log; then
+    log "   🔎 fsck 通过（仅报历史遗留的畸形 submodule URL，对象完整性正常）"
+    return 0
   else
     log "   ⚠️ fsck 失败（rc=$rc）：$(tail -n 1 fsck.log)"
   fi

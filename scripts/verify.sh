@@ -64,6 +64,13 @@ else
 fi
 
 fail=0
+# 历史遗留的畸形 submodule URL 会让 fsck 报错但对象完整（同 backup.sh）
+fsck_benign_only() {
+  local log=$1
+  [[ -s $log ]] || return 1
+  ! grep -qvE '^[[:space:]]*$|gitmodulesUrl: disallowed submodule url' "$log"
+}
+
 for pick in "${picks[@]}"; do
   IFS=$'\t' read -r repo asset bytes sha commit < <(sed -n "${pick}p" "$WORK/candidates.tsv")
   echo ""
@@ -104,14 +111,21 @@ for pick in "${picks[@]}"; do
     continue
   fi
 
-  if ! git --git-dir="$dest" fsck --no-progress --no-dangling >"$WORK/fsck.log" 2>&1; then
-    echo "   ❌ git fsck 失败"
-    tail -n 5 "$WORK/fsck.log"
-    fail=$((fail + 1))
-    rm -f "$file"
-    continue
+  fsck_rc=0
+  git --git-dir="$dest" fsck --no-progress --no-dangling >"$WORK/fsck.log" 2>&1 || fsck_rc=$?
+  if (( fsck_rc != 0 )); then
+    if fsck_benign_only "$WORK/fsck.log"; then
+      echo "   🔎 git fsck 通过（仅报历史遗留的畸形 submodule URL）"
+    else
+      echo "   ❌ git fsck 失败"
+      tail -n 5 "$WORK/fsck.log"
+      fail=$((fail + 1))
+      rm -f "$file"
+      continue
+    fi
+  else
+    echo "   ✅ git fsck 通过"
   fi
-  echo "   ✅ git fsck 通过"
 
   if [[ $commit != "-" && -n $commit ]]; then
     head=$(git --git-dir="$dest" rev-parse HEAD 2>/dev/null || true)
