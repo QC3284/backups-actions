@@ -12,3 +12,8 @@ reconcile.err
 summary.md
 swh-report.md
 shardmap.tsv
+
+# 恢复工具默认输出目录
+.restore-cache/
+restore-*/
+restore-batch/

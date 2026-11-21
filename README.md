@@ -36,7 +36,7 @@
     scripts/summary.sh                生成 Actions Summary
     scripts/prune.sh                  草稿清理 + GFS / keep-last 保留策略
     scripts/verify.sh                 抽检恢复
-    scripts/restore.sh                一键恢复某个仓库（下载/校验/解压/fsck）
+    scripts/restore.sh                恢复工具：get/assets/list/history/batch/swh/verify
     scripts/alert.sh                  失败开 issue / 恢复关闭
     scripts/swh.sh                    SWH 快照核查
     scripts/swh-targets.sh            生成 swh_targets.txt（清单 + 已删库）
@@ -82,13 +82,24 @@ Actions → **Repository Backup and Release** → Run workflow，可选参数：
 
 ### 恢复某个仓库
 
-    # 最新版本：下载 → sha256 → 合并分卷 → zstd -t → 解压 → fsck → HEAD 比对
+    # 下载 → sha256 → 合并分卷 → zstd -t → 解压 → fsck → HEAD 比对（可选 clone）
     bash scripts/restore.sh Devo919/Gewechat --clone ./work
 
-    # 指定历史版本 / 只看资产清单 / 从本地目录离线恢复
-    bash scripts/restore.sh Guovin/iptv-api -t backup-20261121115821
-    bash scripts/restore.sh Guovin/iptv-api --list
-    bash scripts/restore.sh Guovin/iptv-api --from-dir /mnt/usb/backup-20261121
+    # 侦察：这次备份有什么 / 某仓库有哪些资产 / 它历次备份
+    bash scripts/restore.sh list --filter openlist
+    bash scripts/restore.sh assets Guovin/iptv-api
+    bash scripts/restore.sh history Guovin/iptv-api --limit 10
+
+    # 选版本：每日 / 周全量 / 某日期之前
+    bash scripts/restore.sh get Guovin/iptv-api --latest daily
+    bash scripts/restore.sh get Guovin/iptv-api --latest full
+    bash scripts/restore.sh get Guovin/iptv-api --before 2026-11-19
+
+    # 批量（失败不中断）、离线、SWH 兜底、本地包校验
+    bash scripts/restore.sh batch repos.txt --jobs 3
+    bash scripts/restore.sh get Guovin/iptv-api --from-dir /mnt/usb/backup-20261121
+    bash scripts/restore.sh swh Dreamacro/clash
+    bash scripts/restore.sh verify ./pkg.tar.zst --manifest ./manifest.tsv --deep
 
 完整参数、手动步骤、SWH/archive.org 兜底、故障排查见 [恢复教程.md](恢复教程.md)。
 
