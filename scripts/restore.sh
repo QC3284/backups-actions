@@ -114,7 +114,8 @@ while (( $# )); do
     --filter) FILTER=$2; shift 2 ;;
     -d|--dir) WORK=$2; shift 2 ;;
     -o|--out) OUT=$2; shift 2 ;;
-    --clone) CLONE=$2; shift 2 ;;
+    --clone)
+      if [[ -n "${2:-}" && "${2:-}" != -* ]]; then CLONE=$2; shift 2; else CLONE=auto; shift; fi ;;
     -b|--branch) BRANCH=$2; shift 2 ;;
     --from-dir) FROM_DIR=$2; shift 2 ;;
     --download-only) DOWNLOAD_ONLY=1; shift ;;
@@ -235,7 +236,10 @@ resolve_manifest() {
   if [[ -n $MANIFEST_FILE ]]; then
     [[ -f $MANIFEST_FILE ]] || die "manifest 不存在：$MANIFEST_FILE"
     MANIFEST=$MANIFEST_FILE
-    info "使用本地 manifest：$MANIFEST"
+    if [[ -z $TAG ]]; then
+      TAG=$(basename "$MANIFEST" .tsv); TAG=${TAG#manifest-}
+    fi
+    info "使用本地 manifest：$MANIFEST（Release：$TAG）"
     return
   fi
   if [[ -n $FROM_DIR ]]; then
@@ -264,6 +268,7 @@ cmd_get() {
   OWNER=${REPO%%/*}; NAME=${REPO#*/}
   WORK=${WORK:-./restore-${OWNER}-${NAME}}
   OUT=${OUT:-$WORK/repo.git}
+  [[ $CLONE == auto ]] && CLONE="$WORK/work"
   mkdir -p "$WORK"
   resolve_manifest
 

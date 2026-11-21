@@ -95,19 +95,30 @@ cat >> "$REPORT" <<'REPORT_EOF'
 
 ## ♻️ 恢复
 
+一键（推荐）：
+
 ```bash
-# 1. 下载（分卷备份要把 part 全部下载）
-gh release download <TAG> -R <owner/repo> -p 'owner-repo-*.tar.zst*'
+git clone https://github.com/QC3284/repo-backup && cd repo-backup
+bash scripts/restore.sh <owner/repo> --clone ./work
+```
 
-# 2. 如果是分卷，先合并
-cat owner-repo-*.part* > owner-repo.tar.zst
+手工（完整步骤见仓库里的 `恢复教程.md`）：
 
-# 3. 校验（sha256 见 manifest）
-sha256sum owner-repo.tar.zst
+```bash
+# 1. 从 manifest 找到该仓库的资产名 / 字节数 / sha256（分卷时每个 part 各一行）
+awk -F'\t' '$1=="<owner>/<repo>"' manifest-<TAG>.tsv
 
-# 4. 解压、校验、克隆工作副本
+# 2. 下载该仓库的全部资产
+gh release download <TAG> -R QC3284/repo-backup -p '<owner>-<repo>-*' -D ./dl
+
+# 3. 逐卷校验 sha256（分卷存的是单卷哈希），再按名字排序合并
+#    合并后的文件名 = 去掉 .partNNN 的那个资产名
+cat dl/<owner>-<repo>-<epoch>.tar.zst.part* > dl/<owner>-<repo>-<epoch>.tar.zst
+
+# 4. 校验、解压、fsck、克隆
+zstd -t dl/<owner>-<repo>-<epoch>.tar.zst
 mkdir -p restore
-zstd -dc owner-repo.tar.zst | tar xf - -C restore
+zstd -dc dl/<owner>-<repo>-<epoch>.tar.zst | tar -xf - -C restore
 git --git-dir=restore fsck --no-progress
 git clone restore workdir
 ```

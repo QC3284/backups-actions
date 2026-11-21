@@ -21,7 +21,7 @@
 
 ## 2. 当前清单
 
-- 128 个 GitHub 仓库：124 个全量 mirror + 4 个浅克隆（约 400 MB）；不含 OpenClash；
+- 128 个 GitHub 仓库：124 个全量 mirror + 4 个浅克隆（约 130 MB）；不含 OpenClash；
 - **实测（2026-11-21）**：一轮 128 仓产出 134 个资产 / 30.8 GB / 20 分钟（6 分片并行），对账零遗漏；
 - 每日 04:00 UTC 跑一次；保留策略 7 日 + 4 周 + 6 月；
 - 分片按**体积做 LPT 均衡**（scripts/shardmap.sh 预取 GitHub API size，prepare 上传 shardmap 工件），避免某个分片独自卡大仓库；
@@ -142,32 +142,40 @@
 
 ## 5. 恢复手册
 
-Software Heritage（有完整 git 历史，优先）：
+本仓库自己备的（优先，产物可校验；一键：`bash scripts/restore.sh <owner/repo>`）：
 
-    # 注意：SWH API 要求自定义 User-Agent，默认 curl UA 会 403；限流 120 次/小时。
-    curl -s -A 'repo-backup/1.0' \
-      "https://archive.softwareheritage.org/api/1/origin/https%3A%2F%2Fgithub.com%2FDreamacro%2Fclash/visits/?limit=100" \
-      | jq -r '[.[] | select(.snapshot != null)] | first | [.snapshot, .date] | @tsv'
-    # 得到 snapshot id 后，用 SWH 网页或 swh 命令行导出为 git bundle：
-    # https://archive.softwareheritage.org/browse/snapshot/<snapshot_id>/
-    git clone <导出的 .bundle> clash
-
-archive.org（整仓 git bundle，通常滞后 1-2 年）：
-
-    curl -L -o item.zip "https://archive.org/download/github.com-Dreamacro-clash_-_2023-08-06_20-51-37/..."
-    git clone ./repo.bundle clash
-
-本仓库的 Release（本流水线自己备的）：
-
-    gh release download <tag> -R QC3284/repo-backup -p 'owner-repo-*.tar.zst*'
-    cat owner-repo-*.part* > owner-repo.tar.zst     # 分卷时先合并
-    sha256sum owner-repo.tar.zst                    # 与 manifest 比对
-    zstd -t owner-repo.tar.zst && mkdir repo && tar -xf owner-repo.tar.zst -C repo
+    gh release download <tag> -R QC3284/repo-backup -p '<owner>-<repo>-*' -D ./dl
+    # manifest-<tag>.tsv 里查该仓库的 asset / bytes / sha256（分卷时每个 part 一行）
+    awk -F'\t' '$1=="owner/repo"' manifest-<tag>.tsv
+    # 单卷：sha256sum 校验；分卷：逐卷校验后按名字排序合并（合并名 = 去掉 .partNNN）
+    cat dl/owner-repo-<epoch>.tar.zst.part* > dl/owner-repo-<epoch>.tar.zst
+    zstd -t dl/owner-repo-<epoch>.tar.zst
+    mkdir repo && zstd -dc dl/owner-repo-<epoch>.tar.zst | tar -xf - -C repo
     git --git-dir=repo fsck
 
-GitHub 上的 release 资产（SWH 救不了二进制）：
+SWH（完整 git 历史，删库后首选；细节见 [恢复教程.md](../恢复教程.md) 第 8.1 节）：
 
-    gh release download --repo <owner>/<repo> --all-pattern '*'
+    # 1) 找 snapshot（UA 必须自定义，默认 curl UA 会 403；限流 120 次/小时）
+    curl -s -A 'repo-backup/1.0' \
+      "https://archive.softwareheritage.org/api/1/origin/https%3A%2F%2Fgithub.com%2FDreamacro%2Fclash/visits/?limit=100" \
+      | jq -r '[.[] | select(.snapshot != null)][0].snapshot'
+    # 2) 触发打包（POST 路径带 swhid），再轮询到 status=done
+    curl -s -A 'repo-backup/1.0' -X POST "https://archive.softwareheritage.org/api/1/vault/git-bare/swh:1:snp:$SNAP/"
+    curl -s -A 'repo-backup/1.0' "https://archive.softwareheritage.org/api/1/vault/git-bare/swh:1:snp:$SNAP/"
+    # 3) 下载裸仓库 tar，解出的目录名带冒号（Windows 上先改名）
+    curl -L -A 'repo-backup/1.0' -o swh.tar "https://archive.softwareheritage.org/api/1/vault/git-bare/swh:1:snp:$SNAP/raw/"
+    tar -xf swh.tar && mv "swh:1:snp:$SNAP.git" repo.git && git --git-dir=repo.git fsck
+
+或直接 `bash scripts/restore.sh swh Dreamacro/clash`（自动查快照、cooking、下载、fsck）。
+
+archive.org（整仓 bundle，通常滞后 1-2 年）：
+
+    curl -L -o item.zip "https://archive.org/download/<identifier>/<filename>"
+    git clone ./repo.bundle clash
+
+GitHub 上游自己的 release 资产（SWH 救不了二进制）：
+
+    gh release download --repo <owner>/<repo> --pattern '*'
 
 ## 6. 判断仓库是否「已经出事」
 
@@ -181,7 +189,7 @@ GitHub 上的 release 资产（SWH 救不了二进制）：
 | 仓库 | 原因 |
 |---|---|
 | vernesong/OpenClash | 单仓 **47.8 GB**，一次 mirror + 压缩需要约 90GB 磁盘，超出 runner 上限；可以按 `#shallow` 方式只存默认分支快照，暂未纳入 |
-| Guovin/iptv-api | **全量** mirror 实测约 20.3GB、压缩后仍有 19.5GB（内容为每日生成的 IPTV 播放列表，历史巨大）；已改为 `#shallow` 浅克隆（约 28MB），不再做全量 |
+| Guovin/iptv-api（全量） | **全量** mirror 实测约 20.3GB、压缩后仍有 19.5GB（内容为每日生成的 IPTV 播放列表，历史巨大）；已改为 `#shallow` 浅克隆（约 28MB），不再做全量 |
 | AlistGo/alist | 2025-06 已被出售给第三方，上游代码可信度存疑；社区继任 OpenListTeam/OpenList 已在清单 |
 | v2board/v2board | 2023 年后停更、作者失联，商业机场计费面板，法律风险最高 |
 | 各类节点/订阅分发仓 | 纯内容分发，无代码价值，法律风险最高 |
