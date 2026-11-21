@@ -4,6 +4,8 @@
 
 把**可能消失**的 GitHub 仓库克隆成裸镜像（mirror），用 zstd 压缩后作为 GitHub Release 资产保存。整条链路可校验、可恢复。
 
+> **免责声明**：本项目只做技术性归档，备份内容版权归原作者，仅供个人学习与灾备；模拟器/破解/解密/协议端等高风险品类请自行确认当地法律。完整条款见 [恢复教程.md 第 0 节](恢复教程.md#0-免责声明请先读再动手)。
+
 > 2026-11-15 重建：旧清单是 openwrt/immortalwrt 全家桶式的「大而全」镜像（13.4TB 历史），价值低。现在只备份高删库/封禁风险的东西，并为已经消失的项目整理外部存档，见 [docs/backup-targets.md](docs/backup-targets.md)。
 
 ## 它做什么
@@ -34,6 +36,7 @@
     scripts/summary.sh                生成 Actions Summary
     scripts/prune.sh                  草稿清理 + GFS / keep-last 保留策略
     scripts/verify.sh                 抽检恢复
+    scripts/restore.sh                一键恢复某个仓库（下载/校验/解压/fsck）
     scripts/alert.sh                  失败开 issue / 恢复关闭
     scripts/swh.sh                    SWH 快照核查
     scripts/swh-targets.sh            生成 swh_targets.txt（清单 + 已删库）
@@ -77,13 +80,25 @@ Actions → **Repository Backup and Release** → Run workflow，可选参数：
 
     TAG=local-test DRY_RUN=1 LIMIT=2 bash scripts/backup.sh
 
+### 恢复某个仓库
+
+    # 最新版本：下载 → sha256 → 合并分卷 → zstd -t → 解压 → fsck → HEAD 比对
+    bash scripts/restore.sh Devo919/Gewechat --clone ./work
+
+    # 指定历史版本 / 只看资产清单 / 从本地目录离线恢复
+    bash scripts/restore.sh Guovin/iptv-api -t backup-20261121115821
+    bash scripts/restore.sh Guovin/iptv-api --list
+    bash scripts/restore.sh Guovin/iptv-api --from-dir /mnt/usb/backup-20261121
+
+完整参数、手动步骤、SWH/archive.org 兜底、故障排查见 [恢复教程.md](恢复教程.md)。
+
 ## 备份产物
 
 - 命名：{owner}-{repo}-{unix时间戳}.tar.zst
 - 分卷：{同名}.part000、.part001 …（每个 1800MB）
 - 清单：manifest-backup-YYYYmmddHHMMSS.tsv
 
-恢复前先用清单里的 sha256 校验，再解压。完整步骤见 [恢复教程.md](恢复教程.md)。
+恢复前先用清单里的 sha256 校验，再解压。解压出来是**裸仓库根目录**（HEAD/objects/refs 直接可见），不是源码目录。完整步骤见 [恢复教程.md](恢复教程.md)，或直接用 `scripts/restore.sh`。
 
 ## 保留策略
 
