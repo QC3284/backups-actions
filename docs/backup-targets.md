@@ -21,7 +21,8 @@
 
 ## 2. 当前清单
 
-- 128 个 GitHub 仓库：124 个全量 mirror（GitHub API size 合计 **21.5 GB**，按实测 1.4 倍估算单轮 mirror 约 30 GB）+ 4 个浅克隆（约 400 MB）；不含 OpenClash；
+- 128 个 GitHub 仓库：124 个全量 mirror + 4 个浅克隆（约 400 MB）；不含 OpenClash；
+- **实测（2026-11-21）**：一轮 128 仓产出 134 个资产 / 30.8 GB / 20 分钟（6 分片并行），对账零遗漏；
 - 每日 04:00 UTC 跑一次；保留策略 7 日 + 4 周 + 6 月；
 - 分片按**体积做 LPT 均衡**（scripts/shardmap.sh 预取 GitHub API size，prepare 上传 shardmap 工件），避免某个分片独自卡大仓库；
 - 清单行尾标 `#shallow` 的仓库只做 `git clone --mirror --depth 1`（默认分支最新快照，无历史），资产名带 `-shallow` 后缀；它们按体积 0 计算，不占分片负载；

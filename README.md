@@ -89,11 +89,11 @@ Actions → **Repository Backup and Release** → Run workflow，可选参数：
 
 scripts/prune.sh --gfs 按「最近 7 天各一份 + 最近 4 个自然周各一份 + 最近 6 个自然月各一份」保留，其余删除；24 小时内创建的 Release 一律不动，最新一份永远保留。时间以 tag 名里的 UTC 时间戳为准（该仓库的 Release created_at 字段不可靠）。
 
-失败的运行会留下草稿，--drafts 会在每次运行开始时清掉 3 天前的草稿。
+失败的运行会留下草稿，--drafts 会在每次运行开始时清掉 3 天前的草稿；被手动取消的运行会直接删除本次草稿 Release，不会发布只有部分资产的半成品。
 
 ## 已知限制 / 后续工作
 
-- 128 仓的 GitHub API 口径合计 21.5 GB（旧 84 仓实测 mirror 27.4 GB，约为 API 的 1.4 倍，估计单轮 30 GB 上下）；日常任务里单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
+- 实测一轮 128 仓：134 个资产、30.8 GB、20 分钟（6 分片并行，2026-11-21）；日常任务里单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
 - 巨型但内容可再生的仓库走 `#shallow` 浅克隆（只存默认分支快照，资产名带 `-shallow`）：blackmatrix7/ios_rule_script（全量 17.7GB → 浅克隆 74MB）、Guovin/iptv-api（20.3GB → 28MB）、the1812/Bilibili-Evolved（API 340MB）、manga-download/hakuneko（API 200MB）。完整历史交给每周日 `Weekly Full Mirror`（上限 30GB/仓，3 分片并行）；
 - vernesong/OpenClash（47.8GB）暂不纳入，可照 `#shallow` 方式单独处理；
 - SWH 只保存 git 对象，不保存 Release 资产；且其 API 对 UA 有要求（默认 curl UA 会 403）、限流 120 次/小时，脚本已按单次请求 + 间隔实现，并按天分片（scripts/swh.sh 的 SWH_SHARD/SWH_SHARDS）；
