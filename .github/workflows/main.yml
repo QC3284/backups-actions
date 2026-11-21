@@ -166,6 +166,13 @@ jobs:
           sparse-checkout-cone-mode: false
           fetch-depth: 1
 
+      - name: Discard cancelled run
+        if: needs.backup.result == 'cancelled'
+        run: |
+          set -euo pipefail
+          echo "备份分片被取消，删除草稿 Release，不发布本次结果"
+          gh release delete "$TAG" --yes --cleanup-tag || true
+
       - name: Download shard artifacts
         uses: actions/download-artifact@v4
         with:
@@ -188,7 +195,7 @@ jobs:
         run: bash scripts/report.sh
 
       - name: Publish release
-        if: always()
+        if: always() && needs.backup.result != 'cancelled'
         run: |
           set -euo pipefail
           tag="$TAG"
@@ -203,7 +210,7 @@ jobs:
           fi
 
       - name: Apply retention
-        if: always()
+        if: always() && needs.backup.result != 'cancelled'
         run: bash scripts/prune.sh --gfs
         env:
           SKIP_TAG: ${{ needs.prepare.outputs.tag }}
@@ -212,7 +219,7 @@ jobs:
           KEEP_MONTHLY: '6'
 
       - name: Summary
-        if: always()
+        if: always() && needs.backup.result != 'cancelled'
         run: |
           set -euo pipefail
           if bash scripts/summary.sh && [[ -s summary.md ]]; then
@@ -222,7 +229,7 @@ jobs:
           fi
 
       - name: Alert on failures
-        if: always()
+        if: always() && needs.backup.result != 'cancelled'
         run: bash scripts/alert.sh open
         env:
           FAILED_FILE: failed.tsv
