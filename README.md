@@ -19,7 +19,7 @@
 - **恢复演练**：每周日自动抽检 3 个资产，做「下载 → sha256 → 解压 → fsck → HEAD 比对」
 - **分层备份**：日常对超大仓库只做浅克隆（默认分支 tip，资产名带 `-shallow`）；每周日单独跑一次完整 mirror（`full-YYYYMMDD` Release，保留最近 4 份）
 - **失败告警**：有仓库失败时自动开 issue 并持续更新，下一次全部成功时自动关闭
-- **SWH 兜底**：每天核查目标仓库在 Software Heritage 是否有可用快照，结果写入 docs/swh-snapshots.tsv（GitHub 上已经消失的仓库，这是最后的退路）
+- **SWH 兜底**：每天核查目标仓库在 Software Heritage 是否有可用快照，结果写入 docs/swh-snapshots.tsv（GitHub 上已经消失的仓库，这是最后的退路）；197 个目标按天分成 3 片轮转，避开 SWH 120 次/小时的限流
 - **保留策略**：7 日 + 4 周 + 6 月（约 17 份），过期 Release 自动清理
 
 ## 目录结构
@@ -36,8 +36,10 @@
     scripts/verify.sh                 抽检恢复
     scripts/alert.sh                  失败开 issue / 恢复关闭
     scripts/swh.sh                    SWH 快照核查
+    scripts/swh-targets.sh            生成 swh_targets.txt（清单 + 已删库）
+    scripts/check-list.sh             清单体检（gh api 查 404/451/归档/体积）
     back_ck_url.txt                   仓库清单（一行一个 URL，# 开头为注释）
-    swh_targets.txt                   SWH 核查目标（现存清单 + 已删库）
+    swh_targets.txt                   SWH 核查目标（生成物，勿手改）
     docs/backup-targets.md            入选标准、风险证据、已删库存档、恢复手册
     docs/swh-snapshots.tsv            SWH 快照表（自动更新）
     恢复教程.md                        从备份恢复一个仓库的完整流程
@@ -91,10 +93,10 @@ scripts/prune.sh --gfs 按「最近 7 天各一份 + 最近 4 个自然周各一
 
 ## 已知限制 / 后续工作
 
-- 实测一轮 84 仓约 27 GB、18 分钟（6 分片并行）；日常任务里单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
-- 巨型但内容可再生的仓库走 `#shallow` 浅克隆（只存默认分支快照，资产名带 `-shallow`）：blackmatrix7/ios_rule_script（全量 17.7GB → 浅克隆 74MB）、Guovin/iptv-api（20.3GB → 28MB）。完整历史交给每周日 `Weekly Full Mirror`（上限 30GB/仓，3 分片并行）；
+- 128 仓的 GitHub API 口径合计 21.5 GB（旧 84 仓实测 mirror 27.4 GB，约为 API 的 1.4 倍，估计单轮 30 GB 上下）；日常任务里单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
+- 巨型但内容可再生的仓库走 `#shallow` 浅克隆（只存默认分支快照，资产名带 `-shallow`）：blackmatrix7/ios_rule_script（全量 17.7GB → 浅克隆 74MB）、Guovin/iptv-api（20.3GB → 28MB）、the1812/Bilibili-Evolved（API 340MB）、manga-download/hakuneko（API 200MB）。完整历史交给每周日 `Weekly Full Mirror`（上限 30GB/仓，3 分片并行）；
 - vernesong/OpenClash（47.8GB）暂不纳入，可照 `#shallow` 方式单独处理；
-- SWH 只保存 git 对象，不保存 Release 资产；且其 API 对 UA 有要求（默认 curl UA 会 403）、限流 120 次/小时，脚本已按单次请求 + 间隔实现；
+- SWH 只保存 git 对象，不保存 Release 资产；且其 API 对 UA 有要求（默认 curl UA 会 403）、限流 120 次/小时，脚本已按单次请求 + 间隔实现，并按天分片（scripts/swh.sh 的 SWH_SHARD/SWH_SHARDS）；
 - GitHub fork 网络可能被整片封禁（ReVanced 702 仓先例），重要数据应定期导出到本地 / 对象存储。
 
 ## 许可协议

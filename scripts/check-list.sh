@@ -49,8 +49,8 @@ printf 'repo\tstatus\tsize_kb\tarchived\tpushed_at\tstars\n'
 results=$(printf '%s\n' "$urls" | xargs -r -P8 -n1 bash -c 'check_one "$1"' _ | sort)
 printf '%s\n' "$results"
 
-missing=$(printf '%s\n' "$results" | awk -F'\t' '$1=="404"||$1=="451"' | wc -l | tr -d ' ')
-archived=$(printf '%s\n' "$results" | awk -F'\t' '$3=="true"' | wc -l | tr -d ' ')
+missing=$(printf '%s\n' "$results" | awk -F'\t' '$2=="404"||$2=="451"' | wc -l | tr -d ' ')
+archived=$(printf '%s\n' "$results" | awk -F'\t' '$4=="true"' | wc -l | tr -d ' ')
 total=$(printf '%s\n' "$urls" | wc -l | tr -d ' ')
 echo "---" >&2
 echo "共 $total 个仓库：缺失/封禁 $missing，已归档 $archived" >&2

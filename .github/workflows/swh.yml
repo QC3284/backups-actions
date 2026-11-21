@@ -32,7 +32,14 @@ jobs:
           fetch-depth: 1
 
       - name: Check snapshots
-        run: bash scripts/swh.sh
+        env:
+          # SWH 限流 120 次/小时；清单超过 100 个后按天轮转分片，每片 < 100 个请求
+          SWH_SHARDS: '3'
+        run: |
+          set -euo pipefail
+          export SWH_SHARD=$(( 10#$(date -u +%j) % SWH_SHARDS + 1 ))
+          echo "本次核查分片 $SWH_SHARD/$SWH_SHARDS"
+          bash scripts/swh.sh
 
       - name: Publish summary
         if: always()

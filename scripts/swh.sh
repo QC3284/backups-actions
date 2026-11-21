@@ -11,9 +11,10 @@
 #   REPORT      报告（默认 $WORKSPACE/swh-report.md）
 #   LIMIT       >0 时只处理前 N 个（本地调试用）
 #   GH_STATUS   0 = 不查 GitHub 存在性（默认 1）
+#   SWH_SHARD   当前分片序号，1..SWH_SHARDS（默认 1）
+#   SWH_SHARDS  分片总数（默认 1）——SWH 限流 120 次/小时，清单超过 100 个时按天轮转分片
 #
-# SWH API 对 User-Agent 有要求（默认 curl UA 会被 403），且限流 120 次/小时，
-# 所以每个仓库只打 1 次 visits 接口，并在请求间留间隔。
+# SWH API 对 User-Agent 有要求（默认 curl UA 会被 403），所以每个仓库只打 1 次 visits 接口。
 set -Eeuo pipefail
 export LC_ALL=C
 
@@ -23,12 +24,16 @@ OUT=${OUT:-$WORKSPACE/docs/swh-snapshots.tsv}
 REPORT=${REPORT:-$WORKSPACE/swh-report.md}
 LIMIT=${LIMIT:-0}
 GH_STATUS=${GH_STATUS:-1}
+SWH_SHARD=${SWH_SHARD:-1}
+SWH_SHARDS=${SWH_SHARDS:-1}
 UA='repo-backup/1.0 (+https://github.com/QC3284/repo-backup)'
 API='https://archive.softwareheritage.org/api/1'
 
 [[ -f $TARGETS ]] || { echo "目标清单不存在: $TARGETS" >&2; exit 2; }
 command -v jq >/dev/null || { echo "jq 未安装" >&2; exit 2; }
 command -v curl >/dev/null || { echo "curl 未安装" >&2; exit 2; }
+(( SWH_SHARDS >= 1 )) || { echo "SWH_SHARDS 必须 >= 1" >&2; exit 2; }
+(( SWH_SHARD >= 1 && SWH_SHARD <= SWH_SHARDS )) || { echo "SWH_SHARD 必须在 1..$SWH_SHARDS 之间" >&2; exit 2; }
 
 mkdir -p "$(dirname "$OUT")"
 
@@ -71,23 +76,30 @@ gh_state() {
   fi
 }
 
-printf 'url\tgithub\tswh\tsnapshot\tvisited_at\n' > "$OUT"
-printf '# Software Heritage 快照核查（自动生成，勿手改）\n\n' > "$REPORT"
-printf '生成时间：%s\n\n' "$(date -u +%FT%TZ)" >> "$REPORT"
+NEW=$(mktemp)
+trap 'rm -f "$NEW"' EXIT
+declare -A seen=()
+new_order=()
 
-total=0 ok=0 missing=0 errors=0 blocked=0 deleted_with_snapshot=0
-deleted_rows=()
+total=0 ok=0 missing=0 errors=0 blocked=0
+idx=-1
 while IFS= read -r line; do
   url=${line%%#*}
   url=${url//[[:space:]]/}
   [[ -z $url ]] && continue
   [[ $url == https://github.com/* ]] || continue
+  idx=$((idx + 1))
+  (( idx % SWH_SHARDS != SWH_SHARD - 1 )) && continue
   (( LIMIT > 0 && total >= LIMIT )) && break
   total=$((total + 1))
 
   slug=${url#https://github.com/}
   slug=${slug%.git}
   slug=${slug%/}
+  [[ -n ${seen[$slug]+x} ]] && continue
+  seen[$slug]=1
+  new_order+=("$slug")
+
   gh=$(gh_state "$slug")
 
   snapshot='' date='' status=''
@@ -100,36 +112,62 @@ while IFS= read -r line; do
     *)     swh='ok'; ok=$((ok + 1)) ;;
   esac
 
-  if [[ $gh == 404 || $gh == 451 ]] && [[ $swh == ok ]]; then
-    deleted_with_snapshot=$((deleted_with_snapshot + 1))
-    deleted_rows+=("| \`$slug\` | $gh | \`${snapshot:0:12}\` | ${date%%T*} |")
-  fi
-
   printf '%s\t%s\t%s\t%s\t%s\n' \
-    "$url" "$gh" "$swh" "${snapshot:--}" "${date:--}" >> "$OUT"
+    "$url" "$gh" "$swh" "${snapshot:--}" "${date:--}" >> "$NEW"
   sleep 0.4
 done < "$TARGETS"
 
+# 合并：保留旧表里本次未覆盖的行（分片运行时另一片的数据），再按本次顺序追加
+MERGED=$(mktemp)
 {
+  printf 'url\tgithub\tswh\tsnapshot\tvisited_at\n'
+  if [[ -f $OUT ]]; then
+    while IFS=$'\t' read -r url gh swh snapshot date; do
+      [[ $url == url ]] && continue
+      slug=${url#https://github.com/}
+      slug=${slug%.git}; slug=${slug%/}
+      [[ -n ${seen[$slug]+x} ]] && continue
+      printf '%s\t%s\t%s\t%s\t%s\n' "$url" "$gh" "$swh" "$snapshot" "$date"
+    done < "$OUT"
+  fi
+  for slug in "${new_order[@]}"; do
+    grep -P "^https://github\\.com/\\Q${slug}\\E(\\.git)?/?(\\t|\$)" "$NEW" || true
+  done
+} > "$MERGED"
+mv "$MERGED" "$OUT"
+
+read -r m_total m_ok m_missing m_error m_deleted < <(awk -F'\t' '
+  NR == 1 { next }
+  { total++; if ($3 == "ok") ok++; else if ($3 == "absent") missing++; else error++;
+    if (($2 == "404" || $2 == "451") && $3 == "ok") deleted++ }
+  END { print total+0, ok+0, missing+0, error+0, deleted+0 }' "$OUT")
+
+{
+  printf '# Software Heritage 快照核查（自动生成，勿手改）\n\n'
+  printf '生成时间：%s\n\n' "$(date -u +%FT%TZ)"
   printf '## Software Heritage 兜底核查\n\n'
   printf '| 指标 | 数量 |\n| --- | --- |\n'
-  printf '| 目标仓库 | %s |\n| 有快照 | %s |\n| SWH 未收录 | %s |\n| 查询失败 | %s |\n' \
-    "$total" "$ok" "$missing" "$errors"
-  printf '| GitHub 已消失但 SWH 有快照 | %s |\n\n' "$deleted_with_snapshot"
-  if (( deleted_with_snapshot > 0 )); then
+  printf '| 目标仓库（全表） | %s |\n| 有快照 | %s |\n| SWH 未收录 | %s |\n| 查询失败 | %s |\n' \
+    "$m_total" "$m_ok" "$m_missing" "$m_error"
+  printf '| GitHub 已消失但 SWH 有快照 | %s |\n' "$m_deleted"
+  printf '| 本次分片 | %s/%s（%s 个目标，%s 个有快照，%s 个 403） |\n\n' \
+    "$SWH_SHARD" "$SWH_SHARDS" "$total" "$ok" "$blocked"
+  if (( m_deleted > 0 )); then
     printf '### 已从 GitHub 消失、仍可从 SWH 恢复\n\n'
     printf '| 仓库 | GitHub | 快照 | 快照日期 |\n| --- | --- | --- | --- |\n'
-    printf '%s\n' "${deleted_rows[@]}"
+    awk -F'\t' 'NR > 1 && ($2 == "404" || $2 == "451") && $3 == "ok" {
+      url = $1; sub(/^https:\/\/github\.com\//, "", url);
+      printf "| `%s` | %s | `%s` | %s |\n", url, $2, substr($4, 1, 12), substr($5, 1, 10) }' "$OUT"
     printf '\n恢复方式见 docs/backup-targets.md#恢复手册。\n\n'
   fi
   printf '完整数据：%s\n' "${OUT#"$WORKSPACE"/}"
-} >> "$REPORT"
+} > "$REPORT"
 cp "$REPORT" /tmp/swh-step-summary.md
 
-echo "SWH 核查完成：$total 个目标，$ok 个有快照，$missing 个未收录，$errors 个查询失败（其中 $blocked 个被 403 拦截）"
+echo "SWH 核查完成：分片 $SWH_SHARD/$SWH_SHARDS 本次 $total 个目标（$ok 有快照 / $missing 未收录 / $errors 失败，其中 $blocked 个 403）；全表 $m_total 行，$m_ok 有快照，$m_deleted 个已消失但可恢复"
 if (( blocked > 0 )); then
-  echo "::error::$blocked 个请求被 SWH 以 403 拒绝；若全部被拦，说明 runner IP 被反爬策略封禁，快照表不可信"
+  echo "::error::本次 $blocked 个请求被 SWH 以 403 拒绝；若全部被拦，说明 runner IP 被反爬策略封禁，快照表不可信"
 elif (( errors > 0 )); then
-  echo "::warning::$errors 个仓库查询 SWH 失败（限流或网络）"
+  echo "::warning::本次 $errors 个仓库查询 SWH 失败（限流或网络）"
 fi
 exit 0

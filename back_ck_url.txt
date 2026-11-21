@@ -104,6 +104,69 @@ https://github.com/Guovin/iptv-api   #shallow
 https://github.com/gedoor/legado
 https://github.com/hectorqin/reader
 
+# ---------- 音乐 / 音频（版权方直接发函） ----------
+https://github.com/lyswhut/lx-music-desktop
+https://github.com/lyswhut/lx-music-mobile
+https://github.com/maotoumao/MusicFree
+https://github.com/maotoumao/MusicFreePlugins
+https://github.com/qier222/YesPlayMusic
+https://github.com/listen1/listen1_desktop
+https://github.com/UnblockNeteaseMusic/server
+
+# ---------- 视频解析 / 下载（B 站律师函、YouTube 反爬、抖音接口） ----------
+# Bilibili-Evolved .size 约 340MB，历史里带发布产物，走浅克隆
+https://github.com/the1812/Bilibili-Evolved   #shallow
+https://github.com/ScottSloan/Bili23-Downloader
+https://github.com/yutto-dev/yutto
+https://github.com/Evil0ctal/Douyin_TikTok_Download_API
+https://github.com/TeamNewPipe/NewPipe
+https://github.com/yuliskov/SmartTube
+https://github.com/soimort/you-get
+https://github.com/iawia002/lux
+https://github.com/iv-org/invidious
+
+# ---------- 漫画（DMCA 重灾区：2026-03 Fakku 一次点名 4 仓） ----------
+# hakuneko .size 约 200MB，走浅克隆
+https://github.com/manga-download/hakuneko   #shallow
+https://github.com/Suwayomi/Suwayomi-Server
+https://github.com/KotatsuApp/Kotatsu
+
+# ---------- 小说 / 书源 ----------
+https://github.com/freeok/so-novel
+https://github.com/zhongbai2333/Tomato-Novel-Downloader
+https://github.com/kanasimi/work_crawler
+
+# ---------- 弹幕 / 字幕 ----------
+https://github.com/hihkm/DanmakuFactory
+https://github.com/m13253/danmaku2ass
+
+# ---------- 网盘 / 直链 / 学术 ----------
+https://github.com/hmjz100/LinkSwift
+https://github.com/fish2018/pansou
+https://github.com/heartleo/zlib
+https://github.com/ethanwillis/zotero-scihub
+https://github.com/deweizhu/bookget
+
+# ---------- 微信 hook / 协议（腾讯法务重点） ----------
+https://github.com/TonyChen56/WeChatRobot
+https://github.com/ttttupup/wxhelper
+
+# ---------- 破解 / 侧载 / 模拟器 / 激活（Nintendo·Spotify·Google 按 fork 网络批量封禁） ----------
+# ReVanced/revanced-patches 已于 2026-03 被 451（702 仓网络），继任者与同生态在下方
+https://github.com/MorpheApp/morphe-patches
+https://github.com/MorpheApp/morphe-manager
+https://github.com/inotia00/revanced-patches
+https://github.com/ReVanced/revanced-manager
+https://github.com/4nx3b/ArchiveTune
+https://github.com/microg/GmsCore
+https://github.com/strato-emu/strato
+https://github.com/topjohnwu/Magisk
+https://github.com/tiann/KernelSU
+https://github.com/LSPosed/LSPosed
+https://github.com/RikkaApps/Shizuku
+https://github.com/opa334/TrollStore
+https://github.com/massgravel/Microsoft-Activation-Scripts
+
 # ---------- 网盘 / 激活 ----------
 https://github.com/OpenListTeam/OpenList
 https://github.com/qjfoidnh/BaiduPCS-Go
