@@ -16,6 +16,7 @@ on:
 
 permissions:
   contents: write
+  issues: write
 
 concurrency:
   group: repository-backup
@@ -153,6 +154,7 @@ jobs:
     env:
       TAG: ${{ needs.prepare.outputs.tag }}
       START_EPOCH: ${{ needs.prepare.outputs.start_epoch }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -218,3 +220,13 @@ jobs:
           elif [[ -f report.md ]]; then
             cat report.md >> "$GITHUB_STEP_SUMMARY"
           fi
+
+      - name: Alert on failures
+        if: always()
+        run: bash scripts/alert.sh open
+        env:
+          FAILED_FILE: failed.tsv
+
+      - name: Close stale alert
+        if: always() && needs.backup.result == 'success'
+        run: bash scripts/alert.sh close

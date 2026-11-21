@@ -13,6 +13,8 @@
 #   MIN_FREE_MB    磁盘低水位（默认 2000）
 #   SHARD_INDEX    当前分片编号（默认 0）
 #   SHARD_TOTAL    分片总数（默认 1 = 不分片；>1 时按清单顺序取模分组，用于 matrix 并行）
+#   FULL_MIRROR    1 = 忽略清单里的 #shallow 标记，全部做完整 mirror（每周全量任务用）
+#   ONLY_SHALLOW   1 = 只处理清单里标了 #shallow 的仓库（每周全量任务用）
 #   MANIFEST_FILE  清单输出路径（默认 $WORKSPACE/manifest.tsv）
 #   FAILED_FILE    失败清单输出路径（默认 $WORKSPACE/failed.tsv）
 #
@@ -39,6 +41,8 @@ SHARD_MAP=${SHARD_MAP:-$WORKSPACE/shardmap.tsv}
 MIN_FREE_MB=${MIN_FREE_MB:-2000}
 SHARD_INDEX=${SHARD_INDEX:-0}
 SHARD_TOTAL=${SHARD_TOTAL:-1}
+FULL_MIRROR=${FULL_MIRROR:-0}
+ONLY_SHALLOW=${ONLY_SHALLOW:-0}
 MANIFEST=${MANIFEST_FILE:-$WORKSPACE/manifest.tsv}
 FAILED=${FAILED_FILE:-$WORKSPACE/failed.tsv}
 
@@ -210,6 +214,10 @@ while IFS= read -r line; do
   url=${line%%#*}
   url=${url//[[:space:]]/}
   [[ -z $url ]] && continue
+  if (( ONLY_SHALLOW && shallow == 0 )); then
+    continue
+  fi
+  (( FULL_MIRROR )) && shallow=0
   if [[ -n $REPO_FILTER && $url != *"$REPO_FILTER"* ]]; then
     continue
   fi

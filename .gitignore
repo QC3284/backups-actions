@@ -9,3 +9,6 @@ report.md
 upload.err
 probe.err
 reconcile.err
+summary.md
+swh-report.md
+shardmap.tsv

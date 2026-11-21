@@ -1,0 +1,60 @@
+name: Software Heritage Watch
+
+# 已删库/被清空的仓库无法从 GitHub 恢复，SWH 保存的 git 对象是最后退路。
+# 每天核查一次目标清单在 SWH 是否有快照，结果写入 docs/swh-snapshots.tsv。
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '30 5 * * *'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: swh-watch
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: Check SWH snapshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            docs/
+            scripts/
+            swh_targets.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Check snapshots
+        run: bash scripts/swh.sh
+
+      - name: Publish summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if [[ -f swh-report.md ]]; then
+            cat swh-report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Commit snapshot table
+        run: |
+          set -euo pipefail
+          if [[ ! -f docs/swh-snapshots.tsv ]]; then
+            echo "没有生成快照表"
+            exit 0
+          fi
+          if git diff --quiet -- docs/swh-snapshots.tsv; then
+            echo "快照表无变化"
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add docs/swh-snapshots.tsv
+          git commit -m "chore(swh): 更新快照表 $(date -u +%F)"
+          git push

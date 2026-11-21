@@ -70,6 +70,8 @@
 
 > 删库之后，GitHub 不会提供任何恢复入口；能指望的只有外部快照。
 > SWH = Software Heritage，存的是完整 git 对象但不是 Release 资产；archive.org 的 github.com-* 条目是整仓 bundle，通常滞后 1-2 年。
+>
+> 自动化：`scripts/swh.sh` 每天检查 swh_targets.txt 里的仓库在 SWH 的最新快照，结果写入 [swh-snapshots.tsv](swh-snapshots.tsv)（含 snapshot id 与抓取日期）。下表是人工整理的背景资料，两者的 snapshot id 应一致。
 
 | 项目 | 原仓库 | 消失时间 / 原因 | 现存备份 | 完整性 |
 |---|---|---|---|---|
@@ -100,7 +102,10 @@
 
 Software Heritage（有完整 git 历史，优先）：
 
-    curl -s "https://archive.softwareheritage.org/api/1/origin/https://github.com/Dreamacro/clash/get/" | head -c 500
+    # 注意：SWH API 要求自定义 User-Agent，默认 curl UA 会 403；限流 120 次/小时。
+    curl -s -A 'repo-backup/1.0' \
+      "https://archive.softwareheritage.org/api/1/origin/https%3A%2F%2Fgithub.com%2FDreamacro%2Fclash/visits/?limit=100" \
+      | jq -r '[.[] | select(.snapshot != null)] | first | [.snapshot, .date] | @tsv'
     # 得到 snapshot id 后，用 SWH 网页或 swh 命令行导出为 git bundle：
     # https://archive.softwareheritage.org/browse/snapshot/<snapshot_id>/
     git clone <导出的 .bundle> clash

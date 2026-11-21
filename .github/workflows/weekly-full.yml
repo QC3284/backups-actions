@@ -1,0 +1,229 @@
+name: Weekly Full Mirror
+
+# 大仓库（清单里标了 #shallow 的）每天只备默认分支 tip，每周日补一次完整历史。
+# blackmatrix7/ios_rule_script、Guovin/iptv-api 的全量 mirror 分别约 18GB / 20GB，
+# 因此单独跑：独立 Release（full-YYYYMMDD）、只保留最近 4 份。
+
+on:
+  workflow_dispatch:
+    inputs:
+      repo_filter:
+        description: '只备份 URL 中包含该子串的仓库（留空 = 全部浅克隆仓库）'
+        required: false
+        default: ''
+      limit:
+        description: '最多处理前 N 个仓库（0 = 全部）'
+        required: false
+        default: '0'
+  schedule:
+    - cron: '0 3 * * 0'
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: weekly-full-mirror
+  cancel-in-progress: false
+
+env:
+  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+  TZ: UTC
+  SHARD_TOTAL: '3'
+
+jobs:
+  prepare:
+    name: Prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      tag: ${{ steps.create_release.outputs.tag }}
+      start_epoch: ${{ steps.meta.outputs.start_epoch }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/
+            scripts/
+            back_ck_url.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Meta
+        id: meta
+        run: echo "start_epoch=$(date -u +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Prune stale drafts
+        run: bash scripts/prune.sh --drafts
+        env:
+          DRAFT_KEEP_DAYS: '3'
+
+      - name: Create draft release
+        id: create_release
+        run: |
+          set -euo pipefail
+          tag="full-$(date -u +%Y%m%d)"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            tag="full-$(date -u +%Y%m%d%H%M%S)"
+          fi
+          gh release create "$tag" \
+            --title "🧱 Full mirrors $(date -u +'%Y-%m-%d')" \
+            --notes "🚧 每周全量 mirror 进行中…" \
+            --draft
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+  backup:
+    name: Full mirror (shard ${{ matrix.shard }}/3)
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2]
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      SHARD_INDEX: ${{ matrix.shard }}
+      MANIFEST_FILE: manifest-shard-${{ matrix.shard }}.tsv
+      FAILED_FILE: failed-shard-${{ matrix.shard }}.tsv
+      FULL_MIRROR: '1'
+      ONLY_SHALLOW: '1'
+      MAX_CLONE_MB: '30000'
+      CLONE_SEC_PER_MB: '3'
+      CLONE_MAX_TIMEOUT: '3600'
+      FSCK_MAX_TIMEOUT: '3600'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/
+            scripts/
+            back_ck_url.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Free disk space
+        uses: jlumbroso/free-disk-space@v1.3.2
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          docker-images: true
+          swap-storage: true
+
+      - name: Setup
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq zstd pv jq
+          {
+            echo "WORKSPACE=$GITHUB_WORKSPACE"
+            echo "START_EPOCH=$(date -u +%s)"
+          } >> "$GITHUB_ENV"
+
+      - name: Full mirror
+        run: bash scripts/backup.sh
+        env:
+          LIMIT: ${{ inputs.limit }}
+          REPO_FILTER: ${{ inputs.repo_filter }}
+
+      - name: Upload shard results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: full-shard-${{ matrix.shard }}
+          path: |
+            manifest-shard-${{ matrix.shard }}.tsv
+            failed-shard-${{ matrix.shard }}.tsv
+          if-no-files-found: ignore
+          retention-days: 14
+
+  finalize:
+    name: Finalize
+    needs: [prepare, backup]
+    if: always() && needs.prepare.outputs.tag != ''
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      TAG: ${{ needs.prepare.outputs.tag }}
+      START_EPOCH: ${{ needs.prepare.outputs.start_epoch }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            .github/workflows/
+            scripts/
+            back_ck_url.txt
+          sparse-checkout-cone-mode: false
+          fetch-depth: 1
+
+      - name: Download shard artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: full-shard-*
+          merge-multiple: true
+
+      - name: Merge shard manifests
+        run: |
+          set -euo pipefail
+          printf 'repo\turl\tasset\tbytes\tsha256\tcommit\tbacked_up_at\n' > manifest.tsv
+          if compgen -G 'manifest-shard-*.tsv' > /dev/null; then
+            tail -qn +2 manifest-shard-*.tsv >> manifest.tsv || true
+          fi
+          : > failed.tsv
+          cat failed-shard-*.tsv >> failed.tsv 2>/dev/null || true
+          printf 'merged: %s assets, %s failed\n' "$(( $(wc -l < manifest.tsv) - 1 ))" "$(wc -l < failed.tsv)"
+
+      - name: Build report
+        if: always()
+        run: bash scripts/report.sh
+
+      - name: Publish release
+        if: always()
+        run: |
+          set -euo pipefail
+          tag="$TAG"
+          if [[ -s manifest.tsv ]]; then
+            cp manifest.tsv "manifest-$tag.tsv"
+            gh release upload "$tag" "manifest-$tag.tsv" --clobber
+          fi
+          if [[ -f report.md ]]; then
+            gh release edit "$tag" --notes-file report.md --draft=false
+          else
+            gh release edit "$tag" --notes "全量 mirror 异常中断，未生成报告。" --draft=false
+          fi
+
+      - name: Apply retention
+        if: always()
+        run: bash scripts/prune.sh --keep-last 4 --prefix 'full-'
+        env:
+          SKIP_TAG: ${{ needs.prepare.outputs.tag }}
+
+      - name: Summary
+        if: always()
+        run: |
+          set -euo pipefail
+          if bash scripts/summary.sh && [[ -s summary.md ]]; then
+            cat summary.md >> "$GITHUB_STEP_SUMMARY"
+          elif [[ -f report.md ]]; then
+            cat report.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Alert on failures
+        if: always()
+        run: bash scripts/alert.sh open
+        env:
+          FAILED_FILE: failed.tsv
+          ALERT_PREFIX: '[full]'
+
+      - name: Close stale alert
+        if: always() && needs.backup.result == 'success'
+        run: bash scripts/alert.sh close
+        env:
+          ALERT_PREFIX: '[full]'

@@ -2,6 +2,8 @@
 # Release 清理。
 #   --drafts            删除超过 DRAFT_KEEP_DAYS 天的草稿
 #   --gfs               按 7 日 + 4 周 + 6 月 保留，其余删除
+#   --keep-last N       与 --prefix 搭配：只保留最近 N 个匹配前缀的 Release
+#   --prefix P          --keep-last 的 tag 前缀（默认全部）
 #   --dry-run           只打印
 #   --draft-days N      草稿保留天数（默认 3）
 #
@@ -14,6 +16,9 @@ REPO=${GITHUB_REPOSITORY:-}
 DRY_RUN=0
 MODE_DRAFTS=0
 MODE_GFS=0
+MODE_KEEP_LAST=0
+KEEP_LAST=4
+PREFIX=''
 DRAFT_KEEP_DAYS=${DRAFT_KEEP_DAYS:-3}
 KEEP_DAILY=${KEEP_DAILY:-7}
 KEEP_WEEKLY=${KEEP_WEEKLY:-4}
@@ -25,6 +30,8 @@ while (( $# )); do
   case $1 in
     --drafts) MODE_DRAFTS=1 ;;
     --gfs) MODE_GFS=1 ;;
+    --keep-last) MODE_KEEP_LAST=1; KEEP_LAST=$2; shift ;;
+    --prefix) PREFIX=$2; shift ;;
     --dry-run) DRY_RUN=1 ;;
     --draft-days) DRAFT_KEEP_DAYS=$2; shift ;;
     *) echo "未知参数: $1" >&2; exit 2 ;;
@@ -32,10 +39,11 @@ while (( $# )); do
   shift
 done
 
-if (( ! MODE_DRAFTS && ! MODE_GFS )); then
-  echo "用法: $0 [--drafts|--gfs] [--dry-run] [--draft-days N]" >&2
+if (( ! MODE_DRAFTS && ! MODE_GFS && ! MODE_KEEP_LAST )); then
+  echo "用法: $0 [--drafts|--gfs|--keep-last N [--prefix P]] [--dry-run] [--draft-days N]" >&2
   exit 2
 fi
+[[ $KEEP_LAST =~ ^[0-9]+$ ]] || KEEP_LAST=4
 [[ $DRAFT_KEEP_DAYS =~ ^[0-9]+$ ]] || DRAFT_KEEP_DAYS=3
 [[ $KEEP_DAILY =~ ^[0-9]+$ ]] || KEEP_DAILY=7
 [[ $KEEP_WEEKLY =~ ^[0-9]+$ ]] || KEEP_WEEKLY=4
@@ -185,5 +193,40 @@ prune_gfs() {
   echo "保留 $kept 个，删除 $deleted 个"
 }
 
+# 只保留最近 KEEP_LAST 个匹配前缀的 Release（每周全量任务用）
+prune_keep_last() {
+  local -a sorted=()
+  mapfile -t sorted < <(
+    fetch_releases | while IFS=$'\t' read -r tag created draft; do
+      [[ -z $tag ]] && continue
+      [[ -n $PREFIX && $tag != "$PREFIX"* ]] && continue
+      epoch=$(release_epoch "$tag" "$created")
+      printf '%s\t%s\t%s\t%s\n' "$epoch" "$tag" "$created" "$draft"
+    done | sort -t$'\t' -k1,1nr
+  )
+  if (( ${#sorted[@]} == 0 )); then
+    echo "没有匹配前缀 '$PREFIX' 的 Release"
+    return 0
+  fi
+  local epoch tag created draft kept=0 deleted=0
+  for line in "${sorted[@]}"; do
+    IFS=$'\t' read -r epoch tag created draft <<< "$line"
+    [[ $draft == true ]] && continue
+    if [[ -n $SKIP_TAG && $tag == "$SKIP_TAG" ]]; then
+      kept=$((kept + 1))
+      continue
+    fi
+    if (( kept < KEEP_LAST )); then
+      kept=$((kept + 1))
+      echo "  ✅ 保留 $tag（$created）"
+    else
+      delete_release "$tag" "超出最近 $KEEP_LAST 个"
+      deleted=$((deleted + 1))
+    fi
+  done
+  echo "保留 $kept 个，删除 $deleted 个"
+}
+
 if (( MODE_DRAFTS )); then prune_drafts; fi
 if (( MODE_GFS )); then prune_gfs; fi
+if (( MODE_KEEP_LAST )); then prune_keep_last; fi

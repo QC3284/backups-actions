@@ -17,19 +17,30 @@
 - **对账**：上传完成后逐项核对 Release 里的资产名和大小（草稿态 Release 也能核对）
 - **报告**：Release 正文即备份报告（成功/失败/大小/HEAD/失败原因）
 - **恢复演练**：每周日自动抽检 3 个资产，做「下载 → sha256 → 解压 → fsck → HEAD 比对」
+- **分层备份**：日常对超大仓库只做浅克隆（默认分支 tip，资产名带 `-shallow`）；每周日单独跑一次完整 mirror（`full-YYYYMMDD` Release，保留最近 4 份）
+- **失败告警**：有仓库失败时自动开 issue 并持续更新，下一次全部成功时自动关闭
+- **SWH 兜底**：每天核查目标仓库在 Software Heritage 是否有可用快照，结果写入 docs/swh-snapshots.tsv（GitHub 上已经消失的仓库，这是最后的退路）
 - **保留策略**：7 日 + 4 周 + 6 月（约 17 份），过期 Release 自动清理
 
 ## 目录结构
 
-    .github/workflows/main.yml    定时备份 + 发布 + 清理
-    .github/workflows/verify.yml  每周恢复演练
-    scripts/backup.sh             预检 / 克隆 / 压缩 / 上传 / 对账
-    scripts/report.sh             生成备份报告
-    scripts/prune.sh              草稿清理 + GFS 保留策略
-    scripts/verify.sh             抽检恢复
-    back_ck_url.txt               仓库清单（一行一个 URL，# 开头为注释）
-    docs/backup-targets.md        入选标准、风险证据、已删库存档、恢复手册
-    恢复教程.md                    从备份恢复一个仓库的完整流程
+    .github/workflows/main.yml        每日增量备份 + 发布 + 清理 + 告警
+    .github/workflows/weekly-full.yml 每周大仓库全量 mirror（独立 Release）
+    .github/workflows/verify.yml      每周恢复演练
+    .github/workflows/swh.yml         每日 Software Heritage 快照核查
+    scripts/backup.sh                 预检 / 克隆 / 压缩 / 上传 / 对账
+    scripts/shardmap.sh               按体积做 LPT 分片均衡
+    scripts/report.sh                 生成备份报告
+    scripts/summary.sh                生成 Actions Summary
+    scripts/prune.sh                  草稿清理 + GFS / keep-last 保留策略
+    scripts/verify.sh                 抽检恢复
+    scripts/alert.sh                  失败开 issue / 恢复关闭
+    scripts/swh.sh                    SWH 快照核查
+    back_ck_url.txt                   仓库清单（一行一个 URL，# 开头为注释）
+    swh_targets.txt                   SWH 核查目标（现存清单 + 已删库）
+    docs/backup-targets.md            入选标准、风险证据、已删库存档、恢复手册
+    docs/swh-snapshots.tsv            SWH 快照表（自动更新）
+    恢复教程.md                        从备份恢复一个仓库的完整流程
 
 ## 清单怎么维护
 
@@ -80,10 +91,10 @@ scripts/prune.sh --gfs 按「最近 7 天各一份 + 最近 4 个自然周各一
 
 ## 已知限制 / 后续工作
 
-- 实测一轮 84 仓约 27 GB、18 分钟（6 分片并行）；单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
-- 巨型但内容可再生的仓库走 `#shallow` 浅克隆（只存默认分支快照，资产名带 `-shallow`）：blackmatrix7/ios_rule_script（全量 17.7GB → 浅克隆 74MB）、Guovin/iptv-api（20.3GB → 28MB）；
+- 实测一轮 84 仓约 27 GB、18 分钟（6 分片并行）；日常任务里单仓实际 mirror 超过 8 GB 会被跳过并记失败，防止拖垮分片；
+- 巨型但内容可再生的仓库走 `#shallow` 浅克隆（只存默认分支快照，资产名带 `-shallow`）：blackmatrix7/ios_rule_script（全量 17.7GB → 浅克隆 74MB）、Guovin/iptv-api（20.3GB → 28MB）。完整历史交给每周日 `Weekly Full Mirror`（上限 30GB/仓，3 分片并行）；
 - vernesong/OpenClash（47.8GB）暂不纳入，可照 `#shallow` 方式单独处理；
-- 非 GitHub 镜像（gitee / gitcode / Software Heritage）暂不进入流水线，手册见 docs/backup-targets.md；
+- SWH 只保存 git 对象，不保存 Release 资产；且其 API 对 UA 有要求（默认 curl UA 会 403）、限流 120 次/小时，脚本已按单次请求 + 间隔实现；
 - GitHub fork 网络可能被整片封禁（ReVanced 702 仓先例），重要数据应定期导出到本地 / 对象存储。
 
 ## 许可协议
